@@ -1,0 +1,9 @@
+﻿services:
+  - type: web
+    name: engineering-progress-dashboard
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "true"

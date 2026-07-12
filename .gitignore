@@ -1,0 +1,24 @@
+﻿# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+
+# IDE and Agent artifacts
+.vscode/
+.gemini/
+.idea/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Temporary upload and processing files
+*.tmp
+temp_upload_*

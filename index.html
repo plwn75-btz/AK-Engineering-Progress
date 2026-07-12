@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Engineering Progress Tracking Dashboard — Weekly document status tracking for ASK Development Project Phase 1A">
+    <title>Engineering Progress Dashboard</title>
+    <link rel="stylesheet" href="styles.css?v=20260712">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+    <!-- ═══ Header ═══ -->
+    <header class="header">
+        <div class="header-content">
+            <div class="header-left">
+                <div class="header-logo">EP</div>
+                <div class="header-title">
+                    <h1>Engineering Progress Dashboard</h1>
+                    <div class="subtitle" id="projectName">Loading...</div>
+                </div>
+            </div>
+            <div class="header-right">
+                <span class="file-name-badge" id="fileName">—</span>
+                <div class="header-info">
+                    <div><span class="label">Cut-off: </span><span class="value" id="cutoffDate">—</span></div>
+                </div>
+                <button class="btn btn-upload" onclick="openUploadModal()" id="btnUpload">
+                    <span class="btn-icon">📁</span> Upload File
+                </button>
+                <button class="btn btn-primary" onclick="refreshData()" id="btnRefresh">
+                    <span class="btn-icon">🔄</span> Update Data
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- ═══ Tab Navigation ═══ -->
+    <nav class="tab-nav">
+        <div class="tab-nav-inner">
+            <button class="tab-btn active" data-tab="summary" onclick="switchTab('summary', this)">
+                📊 Overall Summary
+            </button>
+            <button class="tab-btn" data-tab="weekly" onclick="switchTab('weekly', this)">
+                📈 Weekly Progress
+            </button>
+            <button class="tab-btn" data-tab="documents" onclick="switchTab('documents', this)">
+                📄 Document Status
+            </button>
+            <button class="tab-btn" data-tab="overdue" onclick="switchTab('overdue', this)">
+                ⚠️ Overdue & Look-ahead <span class="tab-badge" id="overdueBadge" style="display:none">0</span>
+            </button>
+            <button class="tab-btn" data-tab="scurve" onclick="switchTab('scurve', this)">
+                📉 S-Curve
+            </button>
+        </div>
+    </nav>
+
+    <!-- ═══ Main Content ═══ -->
+    <main class="main-content">
+        <!-- Loading State -->
+        <div id="loadingOverlay" class="loading-overlay">
+            <div class="spinner"></div>
+            <div class="loading-text">Loading engineering data...</div>
+        </div>
+
+        <!-- Tab 1: Overall Summary -->
+        <section id="tab-summary" class="tab-panel active" style="display:none">
+            <div class="kpi-grid" id="kpiGrid"></div>
+            <div class="wp-grid" id="wpGrid"></div>
+            <div class="glass-card">
+                <div class="card-header">
+                    <div class="card-title"><span class="icon">📋</span> Work Package Progress Summary</div>
+                </div>
+                <div class="table-wrapper">
+                    <table class="data-table" id="wpSummaryTable">
+                        <thead><tr id="wpSummaryHead"></tr></thead>
+                        <tbody id="wpSummaryBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- Tab 2: Weekly Progress -->
+        <section id="tab-weekly" class="tab-panel">
+            <div class="glass-card">
+                <div class="card-header">
+                    <div class="card-title"><span class="icon">📈</span> Weekly Progress by Discipline</div>
+                </div>
+                <div class="table-wrapper" style="max-height: 600px; overflow-y: auto;">
+                    <table class="data-table" id="weeklyTable">
+                        <thead><tr id="weeklyHead"></tr></thead>
+                        <tbody id="weeklyBody"></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="glass-card">
+                <div class="card-header">
+                    <div class="card-title"><span class="icon">📊</span> Weekly Plan vs Actual (by Work Package)</div>
+                </div>
+                <div class="chart-container" id="weeklyChartContainer">
+                    <canvas id="weeklyChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- Tab 3: Document Status -->
+        <section id="tab-documents" class="tab-panel">
+            <div class="filters-bar">
+                <div class="filter-group">
+                    <label>Work Package:</label>
+                    <select class="filter-select" id="filterWP" onchange="filterDocuments()">
+                        <option value="">All</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Discipline:</label>
+                    <select class="filter-select" id="filterDisc" onchange="filterDocuments()">
+                        <option value="">All</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Status:</label>
+                    <select class="filter-select" id="filterStatus" onchange="filterDocuments()">
+                        <option value="">All</option>
+                        <option value="Not Yet Submitted">Not Yet Submitted</option>
+                        <option value="IFR Submitted">IFR Submitted</option>
+                        <option value="IFA Submitted">IFA Submitted</option>
+                        <option value="AFC Submitted">AFC Submitted</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <input type="text" class="filter-input search-input" id="filterSearch" placeholder="🔍 Search document no. or title..." oninput="filterDocuments()">
+                </div>
+                <button class="export-btn" onclick="exportDocumentsCSV()">📥 Export CSV</button>
+            </div>
+
+            <div class="stats-row" id="docStatsRow"></div>
+
+            <!-- Stacked Bar Chart: Document Status Breakdown by Discipline -->
+            <div class="glass-card" style="margin-bottom: 2rem;">
+                <div class="card-header">
+                    <div class="card-title"><span class="icon">📊</span> Document Status by Discipline (Delayed vs Not Yet Submitted vs Submitted)</div>
+                </div>
+                <div class="chart-container" style="height: 380px;">
+                    <canvas id="docDisciplineChart"></canvas>
+                </div>
+            </div>
+
+            <div class="glass-card">
+                <div class="card-header">
+                    <div class="card-title"><span class="icon">📄</span> Document Status List</div>
+                    <span class="page-info" id="docCountInfo">—</span>
+                </div>
+                <div class="table-wrapper" style="max-height: 550px; overflow-y: auto;">
+                    <table class="data-table" id="docTable">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>WP</th>
+                                <th>Discipline</th>
+                                <th>Document No.</th>
+                                <th>Title</th>
+                                <th>Plan %</th>
+                                <th>Actual %</th>
+                                <th>Variance</th>
+                                <th>IFR Forecast</th>
+                                <th>IFR Submit</th>
+                                <th>IFA Forecast</th>
+                                <th>IFA Submit</th>
+                                <th>AFC Forecast</th>
+                                <th>AFC Submit</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="docBody"></tbody>
+                    </table>
+                </div>
+                <div class="pagination" id="docPagination"></div>
+            </div>
+        </section>
+
+        <!-- Tab 4: Overdue & Look-ahead -->
+        <section id="tab-overdue" class="tab-panel">
+            <!-- Global Overdue Header Filter Bar -->
+            <div class="glass-card" style="margin-bottom: 1.5rem; padding: 1rem 1.5rem; display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: center; border: 1px solid rgba(255,255,255,0.12);">
+                <div class="card-title" style="margin-right: auto;"><span class="icon">🔍</span> Overdue & Look-ahead Filter</div>
+                <div class="filter-group">
+                    <label style="font-weight: 600; color: var(--text-muted);">WP:</label>
+                    <select class="filter-select" id="overdueFilterWP" onchange="filterOverdueTab()">
+                        <option value="">All Work Packages</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label style="font-weight: 600; color: var(--text-muted);">Discipline:</label>
+                    <select class="filter-select" id="overdueFilterDisc" onchange="filterOverdueTab()">
+                        <option value="">All Disciplines</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label style="font-weight: 600; color: var(--text-muted);">Milestone:</label>
+                    <select class="filter-select" id="overdueFilterMS" onchange="filterOverdueTab()">
+                        <option value="">All Milestones</option>
+                        <option value="IFR">IFR</option>
+                        <option value="IFA">IFA</option>
+                        <option value="AFC">AFC</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Stats Row -->
+            <div class="stats-row" id="overdueStatsRow"></div>
+
+            <!-- Stacked Bar Chart: Document Submission Status across Disciplines -->
+            <div class="glass-card" style="margin-bottom: 2rem;">
+                <div class="card-header">
+                    <div class="card-title"><span class="icon">📊</span> Discipline Delays & Submission Progress (Stacked Bar Chart)</div>
+                </div>
+                <div class="chart-container" style="height: 380px;">
+                    <canvas id="overdueDisciplineChart"></canvas>
+                </div>
+            </div>
+
+            <!-- 2-Week Look-ahead Warning -->
+            <div class="warning-panel" id="lookaheadPanel">
+                <div class="panel-title">⚠️ 2-Week Look-ahead — Documents Due Soon</div>
+                <div class="table-wrapper" style="max-height: 350px; overflow-y: auto;">
+                    <table class="data-table" id="lookaheadTable">
+                        <thead>
+                            <tr>
+                                <th>Urgency</th>
+                                <th>WP</th>
+                                <th>Discipline</th>
+                                <th>Document No.</th>
+                                <th>Title</th>
+                                <th>Milestone</th>
+                                <th>Plan Date</th>
+                                <th>Forecast Date</th>
+                                <th>Days Left</th>
+                                <th>Slippage</th>
+                            </tr>
+                        </thead>
+                        <tbody id="lookaheadBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Delayed Documents -->
+            <div class="danger-panel" id="delayedPanel">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
+                    <div class="panel-title" style="margin-bottom: 0;">🔴 Delayed Documents (Type 3.1: Submitted Late & Type 3.2: Overdue Not Issued)</div>
+                    <span class="page-info" id="delayedCountInfo">—</span>
+                </div>
+                <div class="table-wrapper" style="max-height: 400px; overflow-y: auto;">
+                    <table class="data-table" id="delayedTable">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Delay Type</th>
+                                <th>WP</th>
+                                <th>Discipline</th>
+                                <th>Document No.</th>
+                                <th>Title</th>
+                                <th>Milestone</th>
+                                <th>Plan Date</th>
+                                <th>Forecast Date</th>
+                                <th>Submit Date</th>
+                                <th>Days Overdue</th>
+                            </tr>
+                        </thead>
+                        <tbody id="delayedBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Overdue Summary (from Excel Overdue Summary sheet) -->
+            <div class="glass-card">
+                <div class="card-header">
+                    <div class="card-title"><span class="icon">📋</span> Overdue Summary by Discipline (from MDR)</div>
+                </div>
+                <div class="table-wrapper">
+                    <table class="data-table" id="overdueSummaryTable">
+                        <thead>
+                            <tr>
+                                <th>Discipline</th>
+                                <th>Total Overdue</th>
+                                <th>1st Rev.</th>
+                                <th>IFA/AFC Issued 2nd Rev.</th>
+                                <th>Pending to Return</th>
+                            </tr>
+                        </thead>
+                        <tbody id="overdueSummaryBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- Tab 5: S-Curve -->
+        <section id="tab-scurve" class="tab-panel">
+            <div class="glass-card">
+                <div class="card-header">
+                    <div class="card-title"><span class="icon">📉</span> Engineering Progress S-Curve</div>
+                </div>
+                <div class="chart-controls" id="scurveControls"></div>
+                <div class="chart-container" style="height: 450px;">
+                    <canvas id="scurveChart"></canvas>
+                </div>
+            </div>
+            <div class="glass-card">
+                <div class="card-header">
+                    <div class="card-title"><span class="icon">📊</span> S-Curve Data Table</div>
+                </div>
+                <div class="table-wrapper" style="max-height: 400px; overflow-y: auto;">
+                    <table class="data-table" id="scurveTable">
+                        <thead>
+                            <tr>
+                                <th>Work Package / Discipline</th>
+                                <th>Plan Incr.</th>
+                                <th>Plan Cum.</th>
+                                <th>Forecast Incr.</th>
+                                <th>Forecast Cum.</th>
+                                <th>Actual Incr.</th>
+                                <th>Actual Cum.</th>
+                                <th>Deviation</th>
+                            </tr>
+                        </thead>
+                        <tbody id="scurveBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- ═══ Upload Modal ═══ -->
+    <div class="upload-overlay" id="uploadOverlay">
+        <div class="upload-modal" style="position: relative;">
+            <button class="upload-close" onclick="closeUploadModal()">✕</button>
+            <h2>📁 Upload New Excel File</h2>
+            <p>Upload the latest MDR Excel file. The system will auto-detect the cut-off date from the filename.</p>
+            <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
+                <div class="drop-icon">📂</div>
+                <div class="drop-text">Drag & drop your .xlsx file here</div>
+                <div class="drop-hint">or click to browse</div>
+            </div>
+            <input type="file" id="fileInput" accept=".xlsx" style="display:none" onchange="handleFileSelect(event)">
+            <div class="upload-progress" id="uploadProgress">
+                <div class="progress-bar-track">
+                    <div class="progress-bar-fill" id="uploadProgressBar"></div>
+                </div>
+                <div class="progress-text" id="uploadProgressText">Uploading...</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
