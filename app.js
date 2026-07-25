@@ -96,6 +96,12 @@ function renderAll() {
         fileNameEl.title = DASHBOARD_DATA.file_name || 'Unknown Excel File';
     }
     document.getElementById('cutoffDate').textContent = formatDate(DASHBOARD_DATA.summary?.cutoff_date) || '—';
+    
+    const lastUpdatedEl = document.getElementById('lastUpdated');
+    if (lastUpdatedEl && DASHBOARD_DATA.last_updated) {
+        const dt = new Date(DASHBOARD_DATA.last_updated);
+        lastUpdatedEl.textContent = dt.toLocaleString();
+    }
 
     // Populate filter dropdowns
     populateFilters();
@@ -769,44 +775,6 @@ function renderDocPagination(totalPages) {
 function changeDocPage(newPage) {
     docCurrentPage = newPage;
     renderDocumentsTab();
-}
-
-function exportDocumentsCSV() {
-    const allDocs = DASHBOARD_DATA.documents || [];
-    if (allDocs.length === 0) return;
-
-    const headers = [
-        'WP', 'Discipline', 'Document No.', 'Title', 'Class', 'Plan %', 'Actual %', 'Variance',
-        'IFR Forecast', 'IFR Submit Date', 'IFA Forecast', 'IFA Submit Date', 'AFC Forecast', 'AFC Submit Date', 'Status'
-    ];
-
-    const rows = allDocs.map(d => [
-        `"${d.wp || ''}"`,
-        `"${d.discipline || ''}"`,
-        `"${d.doc_no || ''}"`,
-        `"${(d.title || '').replace(/"/g, '""')}"`,
-        `"${d.class || ''}"`,
-        `"${formatPct(d.plan_pct)}"`,
-        `"${formatPct(d.actual_pct)}"`,
-        `"${d.variance !== null ? (d.variance * 100).toFixed(1) + '%' : ''}"`,
-        `"${formatDate(d.ifr_forecast || d.ifr_plan)}"`,
-        `"${formatDate(d.ifr_submit_date)}"`,
-        `"${formatDate(d.ifa_forecast || d.ifa_plan)}"`,
-        `"${formatDate(d.ifa_submit_date)}"`,
-        `"${formatDate(d.afc_forecast || d.afc_plan)}"`,
-        `"${formatDate(d.afc_submit_date)}"`,
-        `"${d.status || ''}"`
-    ]);
-
-    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.setAttribute('download', `Engineering_Documents_Export_${DASHBOARD_DATA.summary?.cutoff_date || 'latest'}.csv`);
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
 }
 
 // ─── Tab 4: Overdue & Look-ahead Tab ────────────────────────────────────────

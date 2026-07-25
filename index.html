@@ -24,6 +24,7 @@
                 <span class="file-name-badge" id="fileName">—</span>
                 <div class="header-info">
                     <div><span class="label">Cut-off: </span><span class="value" id="cutoffDate">—</span></div>
+                    <div style="font-size: 0.75rem; margin-top: 2px;"><span class="label">Updated: </span><span class="value" id="lastUpdated">—</span></div>
                 </div>
                 <button class="btn btn-upload" onclick="openUploadModal()" id="btnUpload">
                     <span class="btn-icon">📁</span> Upload File
@@ -132,7 +133,7 @@
                 <div class="filter-group">
                     <input type="text" class="filter-input search-input" id="filterSearch" placeholder="🔍 Search document no. or title..." oninput="filterDocuments()">
                 </div>
-                <button class="export-btn" onclick="exportDocumentsCSV()">📥 Export CSV</button>
+                <a href="/api/export/documents" class="export-btn" download style="text-decoration: none;">📥 Export Excel</a>
             </div>
 
             <div class="stats-row" id="docStatsRow"></div>
@@ -223,7 +224,10 @@
 
             <!-- 2-Week Look-ahead Warning -->
             <div class="warning-panel" id="lookaheadPanel">
-                <div class="panel-title">⚠️ 2-Week Look-ahead — Documents Due Soon</div>
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
+                    <div class="panel-title" style="margin-bottom: 0;">⚠️ 2-Week Look-ahead — Documents Due Soon</div>
+                    <a href="/api/export/lookahead" class="export-btn" download style="text-decoration: none;">📥 Export Excel</a>
+                </div>
                 <div class="table-wrapper" style="max-height: 350px; overflow-y: auto;">
                     <table class="data-table" id="lookaheadTable">
                         <thead>
@@ -249,7 +253,10 @@
             <div class="danger-panel" id="delayedPanel">
                 <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
                     <div class="panel-title" style="margin-bottom: 0;">🔴 Delayed Documents (Type 3.1: Submitted Late & Type 3.2: Overdue Not Issued)</div>
-                    <span class="page-info" id="delayedCountInfo">—</span>
+                    <div>
+                        <span class="page-info" id="delayedCountInfo" style="margin-right: 1rem;">—</span>
+                        <a href="/api/export/delayed" class="export-btn" download style="text-decoration: none;">📥 Export Excel</a>
+                    </div>
                 </div>
                 <div class="table-wrapper" style="max-height: 400px; overflow-y: auto;">
                     <table class="data-table" id="delayedTable">

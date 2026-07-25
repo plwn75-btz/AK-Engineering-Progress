@@ -17,11 +17,13 @@ import datetime
 import threading
 import shutil
 import tempfile
+import io
 from pathlib import Path
 
 try:
     import openpyxl
     from openpyxl.utils import get_column_letter
+    from openpyxl.styles import Font
 except ImportError:
     print("Installing openpyxl...")
     import subprocess
@@ -96,6 +98,9 @@ def find_latest_excel():
     for f in excel_files:
         if f.name.startswith("~$"):
             continue  # Skip temp files
+        if "MDR" not in f.name.upper():
+            continue  # Skip non-MDR files (e.g. Procurement Plans)
+            
         dt = parse_date_from_filename(f.name)
         if dt:
             dated_files.append((dt, f))
@@ -181,21 +186,43 @@ def extract_summary(wb, filename=None):
     cutoff_date = safe_date(ws["D9"].value)
     prev_cutoff = safe_date(ws["K9"].value)
 
+    # Dynamic row detection based on Column C labels (to handle row insertions like Rebaseline Variance)
+    row_map = {
+        "plan": 12, "forecast": 13, "actual": 14,
+        "variance": 15, "spi_weekly": 16, "spi_cum": 17, "area_concern": 18
+    }
+    for r in range(12, 25):
+        label = safe_str(ws.cell(row=r, column=3).value)
+        if not label: continue
+        label_up = label.upper().strip()
+        if label_up == "LEGEND:": break # Stop at legend to avoid matching legend text
+        if label_up == "PLAN PROGRESS": row_map["plan"] = r
+        elif label_up in ["FORECAST PROGRESS", "REBASELINE PROGRESS"]: row_map["forecast"] = r
+        elif label_up == "ACTUAL PROGRESS": row_map["actual"] = r
+        elif label_up == "VARIANCE": row_map["variance"] = r
+        elif label_up == "SPI (WEEKLY)": row_map["spi_weekly"] = r
+        elif label_up == "SPI (CUMULATIVE)": row_map["spi_cum"] = r
+        elif label_up == "AREA OF CONCERN": row_map["area_concern"] = r
+
+    r_plan, r_fc, r_act = row_map["plan"], row_map["forecast"], row_map["actual"]
+    r_var, r_spiw, r_spic = row_map["variance"], row_map["spi_weekly"], row_map["spi_cum"]
+    r_aoc = row_map["area_concern"]
+
     return {
         "cutoff_date": cutoff_date,
         "prev_cutoff_date": prev_cutoff,
-        "plan_last_week": safe_float(ws["D12"].value),
-        "plan_this_week": safe_float(ws["E12"].value),
-        "forecast_this_week": safe_float(ws["E13"].value),
-        "actual_last_week": safe_float(ws["D14"].value),
-        "actual_this_week": safe_float(ws["E14"].value),
-        "variance_last_week": safe_float(ws["D15"].value),
-        "variance_this_week": safe_float(ws["E15"].value),
-        "spi_weekly_last": safe_float(ws["D16"].value),
-        "spi_weekly_this": safe_float(ws["E16"].value),
-        "spi_cumulative_last": safe_float(ws["D17"].value),
-        "spi_cumulative_this": safe_float(ws["E17"].value),
-        "area_of_concern": safe_str(ws["G18"].value),
+        "plan_last_week": safe_float(ws[f"D{r_plan}"].value),
+        "plan_this_week": safe_float(ws[f"E{r_plan}"].value),
+        "forecast_this_week": safe_float(ws[f"E{r_fc}"].value),
+        "actual_last_week": safe_float(ws[f"D{r_act}"].value),
+        "actual_this_week": safe_float(ws[f"E{r_act}"].value),
+        "variance_last_week": safe_float(ws[f"D{r_var}"].value),
+        "variance_this_week": safe_float(ws[f"E{r_var}"].value),
+        "spi_weekly_last": safe_float(ws[f"D{r_spiw}"].value),
+        "spi_weekly_this": safe_float(ws[f"E{r_spiw}"].value),
+        "spi_cumulative_last": safe_float(ws[f"D{r_spic}"].value),
+        "spi_cumulative_this": safe_float(ws[f"E{r_spic}"].value),
+        "area_of_concern": safe_str(ws[f"G{r_aoc}"].value),
         "project_name": "EPC OF WELLHEAD PLATFORMS FOR AUNG SINKHA DEVELOPMENT PROJECT PHASE 1A (EPC-01)",
         "contractor": "GC Maintenance and Engineering Company Limited",
         "job_no": "SD-20-26600-01",
@@ -788,8 +815,35 @@ def extract_all_data():
         "disciplines": disciplines,
         "wp_list": [wp["label"] for wp in WP_SHEETS],
         "total_documents": len(all_documents),
+        "last_updated": datetime.datetime.now().isoformat(),
     }
 
+def generate_excel_bytes(data_list, headers):
+    """Generate Excel file in memory and return bytes."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Export"
+
+    # Write headers
+    for col_idx, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.font = Font(bold=True)
+
+    # Write data rows
+    for row_idx, row_data in enumerate(data_list, 2):
+        for col_idx, key in enumerate(headers, 1):
+            val = row_data.get(key, "")
+            ws.cell(row=row_idx, column=col_idx, value=val)
+
+    # Adjust column widths
+    for col_idx, header in enumerate(headers, 1):
+        col_letter = get_column_letter(col_idx)
+        ws.column_dimensions[col_letter].width = 20
+
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+    
 
 # ─── HTTP Server ──────────────────────────────────────────────────────────────
 
@@ -810,6 +864,12 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.send_api_data()
         elif self.path == "/api/refresh":
             self.send_api_refresh()
+        elif self.path == "/api/export/delayed":
+            self.send_export_delayed()
+        elif self.path == "/api/export/lookahead":
+            self.send_export_lookahead()
+        elif self.path == "/api/export/documents":
+            self.send_export_documents()
         elif self.path == "/" or self.path == "/index.html":
             self.path = "/index.html"
             super().do_GET()
@@ -866,6 +926,85 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             traceback.print_exc()
             self._send_error(500, str(e))
 
+    def send_export_delayed(self):
+        """Export delayed documents to Excel."""
+        try:
+            with _data_cache["lock"]:
+                data = _data_cache["data"]
+            if data is None:
+                data = extract_all_data()
+
+            delayed = data.get("delay_lookahead", {}).get("delayed", [])
+            cutoff = data.get("delay_lookahead", {}).get("cutoff_date", "unknown")
+            headers = ["doc_no", "title", "discipline", "wp", "milestone", "plan_date", "forecast_date", "submit_date", "delay_days", "delay_type"]
+            
+            excel_bytes = generate_excel_bytes(delayed, headers)
+            filename = f"Delay Documented_{cutoff}.xlsx"
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Content-Length", str(len(excel_bytes)))
+            self.end_headers()
+            self.wfile.write(excel_bytes)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self._send_error(500, str(e))
+
+    def send_export_documents(self):
+        """Export all documents to Excel."""
+        try:
+            with _data_cache["lock"]:
+                data = _data_cache["data"]
+            if data is None:
+                data = extract_all_data()
+
+            docs = data.get("documents", [])
+            cutoff = data.get("delay_lookahead", {}).get("cutoff_date", "unknown")
+            headers = ["doc_no", "title", "discipline", "wp", "class", "plan_pct", "actual_pct", "variance", "ifr_plan", "ifr_forecast", "ifr_submit_date", "ifa_plan", "ifa_forecast", "ifa_submit_date", "afc_plan", "afc_forecast", "afc_submit_date", "status"]
+            
+            # Create a simplified list of dicts for export because the backend dicts have exact keys
+            excel_bytes = generate_excel_bytes(docs, headers)
+            filename = f"Engineering_Documents_{cutoff}.xlsx"
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Content-Length", str(len(excel_bytes)))
+            self.end_headers()
+            self.wfile.write(excel_bytes)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self._send_error(500, str(e))
+
+    def send_export_lookahead(self):
+        """Export lookahead documents to Excel."""
+        try:
+            with _data_cache["lock"]:
+                data = _data_cache["data"]
+            if data is None:
+                data = extract_all_data()
+
+            lookahead = data.get("delay_lookahead", {}).get("lookahead", [])
+            cutoff = data.get("delay_lookahead", {}).get("cutoff_date", "unknown")
+            headers = ["doc_no", "title", "discipline", "wp", "milestone", "plan_date", "forecast_date", "days_remaining", "urgency"]
+            
+            excel_bytes = generate_excel_bytes(lookahead, headers)
+            filename = f"2-Week Lookahead_{cutoff}.xlsx"
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Content-Length", str(len(excel_bytes)))
+            self.end_headers()
+            self.wfile.write(excel_bytes)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self._send_error(500, str(e))
+
     def handle_upload(self):
         """Handle Excel file upload. Saves to BASE_DIR and refreshes data."""
         try:
@@ -911,6 +1050,10 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
             if not filename.endswith(".xlsx"):
                 self._send_error(400, "Only .xlsx files are supported")
+                return
+                
+            if "MDR" not in filename.upper():
+                self._send_error(400, "Invalid file format. Only MDR Excel files are supported.")
                 return
 
             # Save the uploaded file
