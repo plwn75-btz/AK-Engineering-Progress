@@ -173,17 +173,31 @@ function renderSummaryTab() {
     const planPct = formatPct(s.plan_this_week);
     const actualPct = formatPct(s.actual_this_week);
     const forecastPct = formatPct(s.forecast_this_week);
-    const varPct = formatPct(s.variance_this_week);
+    
+    // Rebased Line Variance (+0.30%)
+    const rebVarVal = s.variance_rebased_this !== undefined ? s.variance_rebased_this : s.variance_this_week;
+    const rebVarPct = formatPct(rebVarVal);
+    let rebVarClass = 'green';
+    let rebVarTextClass = 'positive';
+    if (rebVarVal < -0.01) {
+        rebVarClass = 'red';
+        rebVarTextClass = 'negative';
+    } else if (rebVarVal < 0) {
+        rebVarClass = 'amber';
+        rebVarTextClass = 'negative';
+    }
 
-    // Determine variance color
-    let varClass = 'green';
-    let varTextClass = 'positive';
-    if (s.variance_this_week < -0.01) {
-        varClass = 'red';
-        varTextClass = 'negative';
-    } else if (s.variance_this_week < 0) {
-        varClass = 'amber';
-        varTextClass = 'negative';
+    // Non-Rebased Line Variance (-5.46%)
+    const nonRebVarVal = s.variance_non_rebased_this !== undefined ? s.variance_non_rebased_this : ((s.actual_this_week != null && s.plan_this_week != null) ? (s.actual_this_week - s.plan_this_week) : null);
+    const nonRebVarPct = formatPct(nonRebVarVal);
+    let nonRebVarClass = 'green';
+    let nonRebVarTextClass = 'positive';
+    if (nonRebVarVal < -0.01) {
+        nonRebVarClass = 'red';
+        nonRebVarTextClass = 'negative';
+    } else if (nonRebVarVal < 0) {
+        nonRebVarClass = 'amber';
+        nonRebVarTextClass = 'negative';
     }
 
     grid.innerHTML = `
@@ -192,21 +206,28 @@ function renderSummaryTab() {
             <div class="kpi-value blue">${planPct}</div>
             <div class="kpi-sub">Last Week: ${formatPct(s.plan_last_week)}</div>
         </div>
-        <div class="kpi-card ${varClass}">
+        <div class="kpi-card ${rebVarClass}">
             <div class="kpi-label">Actual Progress (This Week)</div>
-            <div class="kpi-value ${varClass}">${actualPct}</div>
+            <div class="kpi-value ${rebVarClass}">${actualPct}</div>
             <div class="kpi-sub">Last Week: ${formatPct(s.actual_last_week)}</div>
         </div>
         <div class="kpi-card purple">
-            <div class="kpi-label">Forecast Progress</div>
+            <div class="kpi-label">Rebaseline Progress</div>
             <div class="kpi-value purple">${forecastPct !== '—' ? forecastPct : 'N/A'}</div>
             <div class="kpi-sub">Cut-off: ${formatDate(s.cutoff_date)}</div>
         </div>
-        <div class="kpi-card ${varClass}">
-            <div class="kpi-label">Progress Variance</div>
-            <div class="kpi-value ${varClass}">${varPct}</div>
+        <div class="kpi-card ${rebVarClass}">
+            <div class="kpi-label">Rebased Line Variance</div>
+            <div class="kpi-value ${rebVarClass}">${rebVarPct}</div>
             <div class="kpi-sub">
-                <span class="kpi-change ${varTextClass}">${s.variance_this_week >= 0 ? '▲' : '▼'} ${varPct}</span> vs Plan
+                <span class="kpi-change ${rebVarTextClass}">${rebVarVal >= 0 ? '▲' : '▼'} ${rebVarPct}</span> vs Rebaseline
+            </div>
+        </div>
+        <div class="kpi-card ${nonRebVarClass}">
+            <div class="kpi-label">Non-Rebased Line</div>
+            <div class="kpi-value ${nonRebVarClass}">${nonRebVarPct}</div>
+            <div class="kpi-sub">
+                <span class="kpi-change ${nonRebVarTextClass}">${nonRebVarVal >= 0 ? '▲' : '▼'} ${nonRebVarPct}</span> vs Original Plan
             </div>
         </div>
         <div class="kpi-card green">
@@ -260,6 +281,7 @@ function renderWPCards() {
             </div>
         `;
     }
+
     wpGrid.innerHTML = html;
 }
 
@@ -277,7 +299,8 @@ function renderWPSummaryTable() {
         <th>Plan % (This Week)</th>
         <th>Forecast % (This Week)</th>
         <th>Actual % (This Week)</th>
-        <th>Variance vs Plan</th>
+        <th>Non-Rebased Line</th>
+        <th>Rebased Line Variance</th>
     `;
 
     const disciplines = DASHBOARD_DATA.weekly_summary?.disciplines || [];
@@ -287,12 +310,20 @@ function renderWPSummaryTable() {
         if (item.is_wp_header) {
             const isOverall = item.is_overall;
             const rowClass = isOverall ? 'overall-row' : 'wp-header';
-            const varVal = item.var_actual_plan;
-            const varFormatted = formatPct(varVal);
-            let varClass = 'var-neutral';
-            if (varVal > 0) varClass = 'var-positive';
-            else if (varVal < -0.01) varClass = 'var-negative';
-            else if (varVal < 0) varClass = 'var-warning';
+            
+            // Non-Rebased Line (Act - Plan)
+            const nonRebVal = item.var_actual_plan;
+            let nonRebClass = 'var-neutral';
+            if (nonRebVal > 0) nonRebClass = 'var-positive';
+            else if (nonRebVal < -0.01) nonRebClass = 'var-negative';
+            else if (nonRebVal < 0) nonRebClass = 'var-warning';
+
+            // Rebased Line Variance (Act - Forecast/Rebaseline)
+            const rebVal = item.var_actual_forecast;
+            let rebClass = 'var-neutral';
+            if (rebVal > 0) rebClass = 'var-positive';
+            else if (rebVal < -0.01) rebClass = 'var-negative';
+            else if (rebVal < 0) rebClass = 'var-warning';
 
             html += `
                 <tr class="${rowClass}">
@@ -304,7 +335,8 @@ function renderWPSummaryTable() {
                     <td>${formatPct(item.this_plan)}</td>
                     <td>${formatPct(item.this_forecast)}</td>
                     <td>${formatPct(item.this_actual)}</td>
-                    <td class="${varClass}">${varFormatted}</td>
+                    <td class="${nonRebClass}">${formatPct(nonRebVal)}</td>
+                    <td class="${rebClass}">${formatPct(rebVal)}</td>
                 </tr>
             `;
         }
@@ -330,13 +362,28 @@ function renderWeeklyTab() {
         <th>Up To This Week (Plan)</th>
         <th>Up To This Week (Forecast)</th>
         <th>Up To This Week (Actual)</th>
-        <th>Variance (Act - Plan)</th>
+        <th>Non-Rebased Line</th>
+        <th>Rebased Line Variance</th>
     `;
 
     const disciplines = DASHBOARD_DATA.weekly_summary?.disciplines || [];
     let html = '';
 
     disciplines.forEach(item => {
+        // Non-Rebased Line (Act - Plan)
+        const nonRebVal = item.var_actual_plan;
+        let nonRebClass = 'var-neutral';
+        if (nonRebVal > 0) nonRebClass = 'var-positive';
+        else if (nonRebVal < -0.01) nonRebClass = 'var-negative';
+        else if (nonRebVal < 0) nonRebClass = 'var-warning';
+
+        // Rebased Line Variance (Act - Forecast/Rebaseline)
+        const rebVal = item.var_actual_forecast;
+        let rebClass = 'var-neutral';
+        if (rebVal > 0) rebClass = 'var-positive';
+        else if (rebVal < -0.01) rebClass = 'var-negative';
+        else if (rebVal < 0) rebClass = 'var-warning';
+
         if (item.is_wp_header) {
             const isOverall = item.is_overall;
             const rowClass = isOverall ? 'overall-row' : 'wp-header';
@@ -350,16 +397,11 @@ function renderWeeklyTab() {
                     <td>${formatPct(item.this_plan)}</td>
                     <td>${formatPct(item.this_forecast)}</td>
                     <td>${formatPct(item.this_actual)}</td>
-                    <td class="${item.var_actual_plan < 0 ? 'var-negative' : 'var-positive'}">${formatPct(item.var_actual_plan)}</td>
+                    <td class="${nonRebClass}">${formatPct(nonRebVal)}</td>
+                    <td class="${rebClass}">${formatPct(rebVal)}</td>
                 </tr>
             `;
         } else {
-            const varVal = item.var_actual_plan;
-            let varClass = 'var-neutral';
-            if (varVal > 0) varClass = 'var-positive';
-            else if (varVal < -0.01) varClass = 'var-negative';
-            else if (varVal < 0) varClass = 'var-warning';
-
             html += `
                 <tr>
                     <td style="padding-left: 1.5rem;">🔹 ${item.name}</td>
@@ -371,7 +413,8 @@ function renderWeeklyTab() {
                     <td>${formatPct(item.this_plan)}</td>
                     <td>${formatPct(item.this_forecast)}</td>
                     <td>${formatPct(item.this_actual)}</td>
-                    <td class="${varClass}">${formatPct(item.var_actual_plan)}</td>
+                    <td class="${nonRebClass}">${formatPct(nonRebVal)}</td>
+                    <td class="${rebClass}">${formatPct(rebVal)}</td>
                 </tr>
             `;
         }
@@ -495,8 +538,10 @@ function renderDocumentsTab() {
     if (!tbody) return;
 
     const wpFilter = document.getElementById('filterWP')?.value || '';
+    const scopeFilter = document.getElementById('filterScope')?.value || '';
     const discFilter = document.getElementById('filterDisc')?.value || '';
     const statusFilter = document.getElementById('filterStatus')?.value || '';
+    const returnFilter = document.getElementById('filterReturnStatus')?.value || '';
     const searchFilter = document.getElementById('filterSearch')?.value?.toLowerCase().trim() || '';
 
     const allDocs = DASHBOARD_DATA.documents || [];
@@ -504,8 +549,32 @@ function renderDocumentsTab() {
     // Filter
     const filtered = allDocs.filter(doc => {
         if (wpFilter && doc.wp !== wpFilter) return false;
+        if (scopeFilter === 'eng' && doc.is_mr_tbe) return false;
+        if (scopeFilter === 'mr_tbe' && !doc.is_mr_tbe) return false;
         if (discFilter && doc.discipline !== discFilter) return false;
-        if (statusFilter && doc.status !== statusFilter) return false;
+        if (statusFilter) {
+            if (statusFilter === 'IFA Submitted') {
+                if (doc.status !== 'IFA Submitted' && doc.status !== 'IFA (A1) Submitted' && doc.status !== 'IFA (C1) Submitted') return false;
+            } else if (doc.status !== statusFilter) {
+                return false;
+            }
+        }
+        if (returnFilter) {
+            if (returnFilter === 'PENDING FINAL APPROVAL' || returnFilter === 'CY AP PENDING') {
+                if (!doc.is_pending_final_approval && !doc.is_cy_ap_pending) return false;
+            } else if (returnFilter === 'COMPLETE') {
+                if (!doc.is_complete && !doc.ap_return_date && !doc.ap2_return_date) return false;
+            } else if (returnFilter === 'APPR') {
+                const c1 = doc.ap_return_code, c2 = doc.ap2_return_code;
+                if (c1 !== 'APPR' && c2 !== 'APPR') return false;
+            } else if (returnFilter === 'APPR-C') {
+                const c1 = doc.ap_return_code, c2 = doc.ap2_return_code;
+                if (c1 !== 'APPR-C' && c2 !== 'APPR-C') return false;
+            } else if (returnFilter === 'Issue Rev.X') {
+                const c1 = doc.ap_return_code || '', c2 = doc.ap2_return_code || '';
+                if (!c1.includes('Rev') && !c2.includes('Rev')) return false;
+            }
+        }
         if (searchFilter) {
             const matchNo = doc.doc_no?.toLowerCase().includes(searchFilter);
             const matchTitle = doc.title?.toLowerCase().includes(searchFilter);
@@ -541,12 +610,37 @@ function renderDocumentsTab() {
         const varPct = doc.variance !== null ? (doc.variance * 100).toFixed(1) + '%' : '—';
         const varClass = doc.variance < 0 ? 'var-negative' : 'var-positive';
 
+        const typeBadge = doc.is_mr_tbe
+            ? `<span class="type-badge ${doc.type ? doc.type.toLowerCase() : 'mr'}">${doc.type || 'MR'}</span>`
+            : '';
+
+        const apTargetDate = doc.ap2_forecast || doc.ap2_plan || doc.ap_forecast || doc.ap_plan;
+        const rawCode = doc.ap2_return_code || doc.ap_return_code;
+        const returnCode = (rawCode && rawCode !== '00:00:00' && rawCode !== 'None' && rawCode !== '-') ? rawCode : null;
+        const returnDate = doc.ap2_return_date || doc.ap_return_date;
+
+        let returnCodeBadge = '—';
+        if (returnCode) {
+            let codeClass = 'deleted';
+            if (returnCode === 'APPR') codeClass = 'appr';
+            else if (returnCode === 'APPR-C') codeClass = 'appr-c';
+            else if (returnCode.includes('Rev')) codeClass = 'rev-x';
+            returnCodeBadge = `<span class="code-badge ${codeClass}">${returnCode}</span>`;
+        }
+
+        let returnDateDisplay = '—';
+        if (returnDate) {
+            returnDateDisplay = `<span style="color: var(--accent-green); font-weight: 600;">${formatDate(returnDate)}</span>`;
+        } else if (doc.is_pending_final_approval || doc.is_cy_ap_pending) {
+            returnDateDisplay = `<span class="status-badge pending-final-approval">PENDING FINAL APPROVAL</span>`;
+        }
+
         html += `
             <tr>
                 <td>${rowNo}</td>
                 <td><span class="status-badge" style="background: rgba(255,255,255,0.05); color: var(--text-primary); border: none;">${doc.wp}</span></td>
                 <td><b>${doc.discipline || '—'}</b></td>
-                <td style="font-family: monospace; color: var(--accent-cyan);">${doc.doc_no || '—'}</td>
+                <td style="font-family: monospace; color: var(--accent-cyan);">${typeBadge}${doc.doc_no || '—'}</td>
                 <td style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${doc.title || ''}">${doc.title || '—'}</td>
                 <td>${formatPct(doc.plan_pct)}</td>
                 <td>${formatPct(doc.actual_pct)}</td>
@@ -557,13 +651,16 @@ function renderDocumentsTab() {
                 <td>${formatDate(doc.ifa_submit_date)}</td>
                 <td>${formatDate(doc.afc_forecast || doc.afc_plan)}</td>
                 <td>${formatDate(doc.afc_submit_date)}</td>
+                <td>${formatDate(apTargetDate)}</td>
+                <td>${returnCodeBadge}</td>
+                <td>${returnDateDisplay}</td>
                 <td><span class="status-badge ${statusClass}">${doc.status || 'Unknown'}</span></td>
             </tr>
         `;
     });
 
     if (pageDocs.length === 0) {
-        html = `<tr><td colspan="15" style="text-align: center; padding: 2rem; color: var(--text-muted);">No documents match your filter criteria.</td></tr>`;
+        html = `<tr><td colspan="18" style="text-align: center; padding: 2rem; color: var(--text-muted);">No documents match your filter criteria.</td></tr>`;
     }
 
     tbody.innerHTML = html;
@@ -575,6 +672,8 @@ function getStatusBadgeClass(status) {
         case 'Not Yet Submitted': return 'not-submitted';
         case 'IFR Submitted': return 'ifr-submitted';
         case 'IFA Submitted': return 'ifa-submitted';
+        case 'IFA (A1) Submitted': return 'ifa-a1-submitted';
+        case 'IFA (C1) Submitted': return 'ifa-c1-submitted';
         case 'AFC Submitted': return 'afc-submitted';
         default: return '';
     }
@@ -586,13 +685,37 @@ function renderDocStatsRow(allDocs, filteredDocs) {
 
     const notSub = filteredDocs.filter(d => d.status === 'Not Yet Submitted').length;
     const ifrSub = filteredDocs.filter(d => d.status === 'IFR Submitted').length;
-    const ifaSub = filteredDocs.filter(d => d.status === 'IFA Submitted').length;
+    const ifaSub = filteredDocs.filter(d => d.status === 'IFA Submitted' || d.status === 'IFA (A1) Submitted' || d.status === 'IFA (C1) Submitted').length;
     const afcSub = filteredDocs.filter(d => d.status === 'AFC Submitted').length;
+    
+    // Breakdown of Pending Final Approval
+    const pendingFinalDocs = filteredDocs.filter(d => d.is_pending_final_approval || d.is_cy_ap_pending);
+    const pendingFinalCount = pendingFinalDocs.length;
+    const engPending = pendingFinalDocs.filter(d => !d.is_mr_tbe).length;
+    const mrPending = pendingFinalDocs.filter(d => d.is_mr_tbe && d.type === 'MR').length;
+    const tbePending = pendingFinalDocs.filter(d => d.is_mr_tbe && d.type === 'TBE').length;
+
+    // Breakdown of COMPLETE (Approved status AP and returned from PTTEPI)
+    const engTotal = filteredDocs.filter(d => !d.is_mr_tbe).length;
+    const mrTotal = filteredDocs.filter(d => d.is_mr_tbe && d.type === 'MR').length;
+    const tbeTotal = filteredDocs.filter(d => d.is_mr_tbe && d.type === 'TBE').length;
+
+    const completeDocs = filteredDocs.filter(d => d.is_complete || d.ap_return_date || d.ap2_return_date);
+    const completeCount = completeDocs.length;
+    const engComplete = completeDocs.filter(d => !d.is_mr_tbe).length;
+    const mrComplete = completeDocs.filter(d => d.is_mr_tbe && d.type === 'MR').length;
+    const tbeComplete = completeDocs.filter(d => d.is_mr_tbe && d.type === 'TBE').length;
+
+    const engPct = engTotal > 0 ? ((engComplete / engTotal) * 100).toFixed(1) : '0.0';
+    const mrPct = mrTotal > 0 ? ((mrComplete / mrTotal) * 100).toFixed(1) : '0.0';
+    const tbePct = tbeTotal > 0 ? ((tbeComplete / tbeTotal) * 100).toFixed(1) : '0.0';
+
+    const mrTbeCount = filteredDocs.filter(d => d.is_mr_tbe).length;
 
     statsContainer.innerHTML = `
         <div class="stat-chip info">
             <div class="stat-number">${filteredDocs.length}</div>
-            <div class="stat-label">Filtered Documents</div>
+            <div class="stat-label">Filtered Documents (${mrTbeCount} MR/TBE)</div>
         </div>
         <div class="stat-chip warning">
             <div class="stat-number">${notSub}</div>
@@ -610,12 +733,33 @@ function renderDocStatsRow(allDocs, filteredDocs) {
             <div class="stat-number">${afcSub}</div>
             <div class="stat-label">AFC Submitted</div>
         </div>
+        <div class="stat-chip" style="border-color: rgba(139, 92, 246, 0.45); background: rgba(139, 92, 246, 0.08);">
+            <div class="stat-number" style="color: #a78bfa;">${pendingFinalCount}</div>
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+                <div class="stat-label" style="color: #c4b5fd; font-weight: 700;">PENDING FINAL APPROVAL</div>
+                <div style="font-size: 0.72rem; color: #a78bfa; font-weight: 700; letter-spacing: 0.3px; font-family: monospace;">
+                    ENG ${engPending} / MR ${mrPending} / TBE ${tbePending}
+                </div>
+            </div>
+        </div>
+        <div class="stat-chip" style="border-color: rgba(16, 185, 129, 0.45); background: rgba(16, 185, 129, 0.08);">
+            <div class="stat-number" style="color: var(--accent-green);">${completeCount}</div>
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+                <div class="stat-label" style="color: #6ee7b7; font-weight: 700;">COMPLETE</div>
+                <div style="font-size: 0.72rem; color: var(--accent-green); font-weight: 700; letter-spacing: 0.3px; font-family: monospace;">
+                    ENG ${engComplete} (${engPct}%) / MR ${mrComplete} (${mrPct}%) / TBE ${tbeComplete} (${tbePct}%)
+                </div>
+            </div>
+        </div>
     `;
 }
 
 function isDocDelayedOrSlipped(doc, todayStr) {
     if (!todayStr) todayStr = DASHBOARD_DATA?.delay_lookahead?.reference_date || new Date().toISOString().split('T')[0];
-    const milestones = [
+    const milestones = doc.is_mr_tbe ? [
+        { forecast: doc.ifa_forecast, plan: doc.ifa_plan, submit: doc.ifa_submit_date },
+        { forecast: doc.afc_forecast, plan: doc.afc_plan, submit: doc.afc_submit_date }
+    ] : [
         { forecast: doc.ifr_forecast, plan: doc.ifr_plan, submit: doc.ifr_submit_date },
         { forecast: doc.ifa_forecast, plan: doc.ifa_plan, submit: doc.ifa_submit_date },
         { forecast: doc.afc_forecast, plan: doc.afc_plan, submit: doc.afc_submit_date }
@@ -1193,11 +1337,17 @@ function renderActiveScurve() {
     if (tbody) {
         let html = '';
         tableData.forEach(row => {
-            const devVal = row.deviation;
-            let devClass = 'var-neutral';
-            if (devVal > 0) devClass = 'var-positive';
-            else if (devVal < -0.01) devClass = 'var-negative';
-            else if (devVal < 0) devClass = 'var-warning';
+            const nonRebVal = row.dev_non_rebased !== undefined ? row.dev_non_rebased : row.deviation;
+            let nonRebClass = 'var-neutral';
+            if (nonRebVal > 0) nonRebClass = 'var-positive';
+            else if (nonRebVal < -0.01) nonRebClass = 'var-negative';
+            else if (nonRebVal < 0) nonRebClass = 'var-warning';
+
+            const rebVal = row.dev_rebased;
+            let rebClass = 'var-neutral';
+            if (rebVal > 0) rebClass = 'var-positive';
+            else if (rebVal < -0.01) rebClass = 'var-negative';
+            else if (rebVal < 0) rebClass = 'var-warning';
 
             html += `
                 <tr>
@@ -1208,7 +1358,8 @@ function renderActiveScurve() {
                     <td>${formatPct(row.forecast_cum)}</td>
                     <td>${formatPct(row.actual_incr)}</td>
                     <td>${formatPct(row.actual_cum)}</td>
-                    <td class="${devClass}">${formatPct(row.deviation)}</td>
+                    <td class="${nonRebClass}">${formatPct(nonRebVal)}</td>
+                    <td class="${rebClass}">${formatPct(rebVal)}</td>
                 </tr>
             `;
         });

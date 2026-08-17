@@ -165,6 +165,18 @@ def safe_date(val):
     return s
 
 
+def safe_code(val):
+    """Convert return code value to clean text string safely."""
+    if val is None:
+        return None
+    if isinstance(val, (datetime.time, datetime.datetime, datetime.date)):
+        return None
+    s = str(val).strip()
+    if not s or s in ("-", "None", "00:00:00", "0", "N/A", "#N/A"):
+        return None
+    return s
+
+
 def cell_val(ws, row, col):
     """Get cell value by row number and column letter."""
     return ws[f"{col}{row}"].value
@@ -188,7 +200,7 @@ def extract_summary(wb, filename=None):
 
     # Dynamic row detection based on Column C labels (to handle row insertions like Rebaseline Variance)
     row_map = {
-        "plan": 12, "forecast": 13, "actual": 14,
+        "plan": 12, "forecast": 13, "rebaseline_variance": None, "actual": 14,
         "variance": 15, "spi_weekly": 16, "spi_cum": 17, "area_concern": 18
     }
     for r in range(12, 25):
@@ -198,6 +210,7 @@ def extract_summary(wb, filename=None):
         if label_up == "LEGEND:": break # Stop at legend to avoid matching legend text
         if label_up == "PLAN PROGRESS": row_map["plan"] = r
         elif label_up in ["FORECAST PROGRESS", "REBASELINE PROGRESS"]: row_map["forecast"] = r
+        elif label_up == "REBASELINE VARIANCE": row_map["rebaseline_variance"] = r
         elif label_up == "ACTUAL PROGRESS": row_map["actual"] = r
         elif label_up == "VARIANCE": row_map["variance"] = r
         elif label_up == "SPI (WEEKLY)": row_map["spi_weekly"] = r
@@ -205,24 +218,49 @@ def extract_summary(wb, filename=None):
         elif label_up == "AREA OF CONCERN": row_map["area_concern"] = r
 
     r_plan, r_fc, r_act = row_map["plan"], row_map["forecast"], row_map["actual"]
+    r_reb_var = row_map.get("rebaseline_variance")
     r_var, r_spiw, r_spic = row_map["variance"], row_map["spi_weekly"], row_map["spi_cum"]
     r_aoc = row_map["area_concern"]
+
+    plan_last = safe_float(ws[f"D{r_plan}"].value) if r_plan else None
+    plan_this = safe_float(ws[f"E{r_plan}"].value) if r_plan else None
+    fc_last = safe_float(ws[f"D{r_fc}"].value) if r_fc else None
+    fc_this = safe_float(ws[f"E{r_fc}"].value) if r_fc else None
+    act_last = safe_float(ws[f"D{r_act}"].value) if r_act else None
+    act_this = safe_float(ws[f"E{r_act}"].value) if r_act else None
+
+    # Rebased Line Variance (+0.30% in B1: Actual - Rebaseline/Forecast)
+    reb_var_last = safe_float(ws[f"D{r_reb_var}"].value) if r_reb_var else None
+    reb_var_this = safe_float(ws[f"E{r_reb_var}"].value) if r_reb_var else None
+    if reb_var_this is None and act_this is not None and fc_this is not None:
+        reb_var_this = round(act_this - fc_this, 6)
+    if reb_var_last is None and act_last is not None and fc_last is not None:
+        reb_var_last = round(act_last - fc_last, 6)
+
+    # Non-Rebased Line Variance (-5.46% in B1: Actual - Original Baseline Plan)
+    non_reb_var_this = round(act_this - plan_this, 6) if (act_this is not None and plan_this is not None) else None
+    non_reb_var_last = round(act_last - plan_last, 6) if (act_last is not None and plan_last is not None) else None
 
     return {
         "cutoff_date": cutoff_date,
         "prev_cutoff_date": prev_cutoff,
-        "plan_last_week": safe_float(ws[f"D{r_plan}"].value),
-        "plan_this_week": safe_float(ws[f"E{r_plan}"].value),
-        "forecast_this_week": safe_float(ws[f"E{r_fc}"].value),
-        "actual_last_week": safe_float(ws[f"D{r_act}"].value),
-        "actual_this_week": safe_float(ws[f"E{r_act}"].value),
-        "variance_last_week": safe_float(ws[f"D{r_var}"].value),
-        "variance_this_week": safe_float(ws[f"E{r_var}"].value),
-        "spi_weekly_last": safe_float(ws[f"D{r_spiw}"].value),
-        "spi_weekly_this": safe_float(ws[f"E{r_spiw}"].value),
-        "spi_cumulative_last": safe_float(ws[f"D{r_spic}"].value),
-        "spi_cumulative_this": safe_float(ws[f"E{r_spic}"].value),
-        "area_of_concern": safe_str(ws[f"G{r_aoc}"].value),
+        "plan_last_week": plan_last,
+        "plan_this_week": plan_this,
+        "forecast_last_week": fc_last,
+        "forecast_this_week": fc_this,
+        "actual_last_week": act_last,
+        "actual_this_week": act_this,
+        "variance_rebased_last": reb_var_last,
+        "variance_rebased_this": reb_var_this,
+        "variance_non_rebased_last": non_reb_var_last,
+        "variance_non_rebased_this": non_reb_var_this,
+        "variance_last_week": reb_var_last if reb_var_last is not None else non_reb_var_last,
+        "variance_this_week": reb_var_this if reb_var_this is not None else non_reb_var_this,
+        "spi_weekly_last": safe_float(ws[f"D{r_spiw}"].value) if r_spiw else None,
+        "spi_weekly_this": safe_float(ws[f"E{r_spiw}"].value) if r_spiw else None,
+        "spi_cumulative_last": safe_float(ws[f"D{r_spic}"].value) if r_spic else None,
+        "spi_cumulative_this": safe_float(ws[f"E{r_spic}"].value) if r_spic else None,
+        "area_of_concern": safe_str(ws[f"G{r_aoc}"].value) if r_aoc else "",
         "project_name": "EPC OF WELLHEAD PLATFORMS FOR AUNG SINKHA DEVELOPMENT PROJECT PHASE 1A (EPC-01)",
         "contractor": "GC Maintenance and Engineering Company Limited",
         "job_no": "SD-20-26600-01",
@@ -370,7 +408,7 @@ def extract_documents(wb, sheet_name, wp_label):
         # AP (Approval/Return)
         ap_plan = safe_date(ws[f"AN{row}"].value)
         ap_forecast = safe_date(ws[f"AO{row}"].value)
-        ap_return_code = safe_str(ws[f"AP{row}"].value)
+        ap_return_code = safe_code(ws[f"AP{row}"].value)
         ap_return_date = safe_date(ws[f"AQ{row}"].value)
 
         # Determine status based on "Submit to PTTEPI Date" columns
@@ -384,8 +422,11 @@ def extract_documents(wb, sheet_name, wp_label):
         else:
             status = "Not Yet Submitted"
 
-        # Revision scheme
+        # Revision scheme / Remarks
         remarks = safe_str(ws[f"U{row}"].value)
+
+        # PENDING FINAL APPROVAL condition for Regular Eng Deliverables: AFC submit date filled AND AP Return date blank
+        is_pending_final_approval = bool(afc_submit_date) and not bool(ap_return_date)
 
         doc = {
             "no": b_val,
@@ -406,6 +447,10 @@ def extract_documents(wb, sheet_name, wp_label):
             "revision_scheme": remarks,
             "wp": wp_label,
             "status": status,
+            "is_mr_tbe": False,
+            "is_pending_final_approval": is_pending_final_approval,
+            "is_cy_ap_pending": is_pending_final_approval,
+            "is_complete": bool(ap_return_date),
             # IFR
             "ifr_plan": ifr_plan,
             "ifr_forecast": ifr_forecast,
@@ -432,6 +477,148 @@ def extract_documents(wb, sheet_name, wp_label):
             "ap_forecast": ap_forecast,
             "ap_return_code": ap_return_code,
             "ap_return_date": ap_return_date,
+        }
+        documents.append(doc)
+
+    return documents
+
+
+def extract_mr_tbe_documents(wb):
+    """Extract procurement engineering MR/TBE documents from 'PRO.ENGINEERING_MR TBE' sheet."""
+    if "PRO.ENGINEERING_MR TBE" not in wb.sheetnames:
+        return []
+
+    ws = wb["PRO.ENGINEERING_MR TBE"]
+    documents = []
+    current_wp = "WP01 Topside"
+
+    for r in range(12, ws.max_row + 1):
+        b_val = ws.cell(row=r, column=2).value  # Column B
+        if not b_val:
+            continue
+        
+        b_str = str(b_val).strip()
+        if b_str.startswith("WP01 TOPSIDE"):
+            current_wp = "WP01 Topside"
+            continue
+        elif b_str.startswith("WP01 JACKET"):
+            current_wp = "WP01 Jacket"
+            continue
+        elif b_str.startswith("WP02 TOPSIDE"):
+            current_wp = "WP02 Topside"
+            continue
+        elif b_str.startswith("WP02 JACKET"):
+            current_wp = "WP02 Jacket"
+            continue
+
+        try:
+            int(b_val)
+        except (ValueError, TypeError):
+            continue
+
+        doc_no = safe_str(ws.cell(row=r, column=9).value)  # Column I
+        if not doc_no or doc_no.startswith("#"):
+            continue
+
+        disc = safe_str(ws.cell(row=r, column=4).value)      # Column D: Disc
+        doc_type = safe_str(ws.cell(row=r, column=5).value)  # Column E: Type (MR / TBE)
+        title = safe_str(ws.cell(row=r, column=10).value)    # Column J: Document Title
+        remarks = safe_str(ws.cell(row=r, column=21).value)  # Column U: Remarks / Revision Scheme
+
+        # Milestone 1: IFA (A1)
+        ifa_plan = safe_date(ws.cell(row=r, column=22).value)       # Column V: PLAN
+        ifa_forecast = safe_date(ws.cell(row=r, column=23).value)   # Column W: REBASELINE PLAN / Forecast
+        ifa_submit_id = safe_str(ws.cell(row=r, column=24).value)   # Column X: D2 SUBMIT ID
+        ifa_submit_date = safe_date(ws.cell(row=r, column=25).value)# Column Y: SUBMIT TO PTTEPI DATE
+        ifa_actual = safe_date(ws.cell(row=r, column=26).value)     # Column Z: ACTUAL meDMS
+        ifa_transmittal = safe_str(ws.cell(row=r, column=27).value) # Column AA: Transmittal No.
+
+        # Milestone 1 Return: AP
+        ap_plan = safe_date(ws.cell(row=r, column=28).value)        # Column AB
+        ap_forecast = safe_date(ws.cell(row=r, column=29).value)    # Column AC
+        ap_return_code = safe_code(ws.cell(row=r, column=30).value) # Column AD: RETURN CODE
+        ap_return_date = safe_date(ws.cell(row=r, column=31).value) # Column AE: RETURN FROM PTTEPI DATE
+
+        # Milestone 2: IFA (C1)
+        afc_plan = safe_date(ws.cell(row=r, column=34).value)       # Column AH: PLAN
+        afc_forecast = safe_date(ws.cell(row=r, column=35).value)   # Column AI: FORECAST
+        afc_submit_id = safe_str(ws.cell(row=r, column=36).value)   # Column AJ: D2 SUBMIT ID
+        afc_submit_date = safe_date(ws.cell(row=r, column=37).value)# Column AK: SUBMIT TO PTTEPI DATE
+        afc_actual = safe_date(ws.cell(row=r, column=38).value)     # Column AL: ACTUAL meDMS
+        afc_transmittal = safe_str(ws.cell(row=r, column=39).value) # Column AM: Transmittal No.
+
+        # Milestone 2 Return: AP
+        ap2_plan = safe_date(ws.cell(row=r, column=40).value)       # Column AN
+        ap2_forecast = safe_date(ws.cell(row=r, column=41).value)   # Column AO
+        ap2_return_code = safe_code(ws.cell(row=r, column=42).value)# Column AP: RETURN CODE
+        ap2_return_date = safe_date(ws.cell(row=r, column=43).value)# Column AQ: RETURN FROM PTTEPI DATE
+
+        # Determine document status
+        if afc_submit_date:
+            status = "IFA (C1) Submitted"
+        elif ifa_submit_date:
+            status = "IFA (A1) Submitted"
+        else:
+            status = "Not Yet Submitted"
+
+        # PENDING FINAL APPROVAL condition: IFA (A1) submit date filled AND AP Return blank OR IFA (C1) submit date filled AND AP Return blank
+        a1_pending = bool(ifa_submit_date) and not bool(ap_return_date)
+        c1_pending = bool(afc_submit_date) and not bool(ap2_return_date)
+        is_pending_final_approval = a1_pending or c1_pending
+
+        doc = {
+            "no": b_val,
+            "area": safe_str(ws.cell(row=r, column=3).value),
+            "discipline": disc,
+            "type": doc_type,
+            "seq_no": safe_str(ws.cell(row=r, column=6).value),
+            "format": safe_str(ws.cell(row=r, column=7).value),
+            "doc_no": doc_no,
+            "title": title,
+            "class": safe_str(ws.cell(row=r, column=11).value),
+            "mh": safe_float(ws.cell(row=r, column=12).value),
+            "weight_l2": safe_float(ws.cell(row=r, column=15).value),
+            "plan_pct": safe_float(ws.cell(row=r, column=16).value),
+            "forecast_pct": safe_float(ws.cell(row=r, column=17).value),
+            "actual_pct": safe_float(ws.cell(row=r, column=18).value),
+            "variance": safe_float(ws.cell(row=r, column=20).value),
+            "revision_scheme": remarks,
+            "wp": current_wp,
+            "status": status,
+            "is_mr_tbe": True,
+            "is_pending_final_approval": is_pending_final_approval,
+            "is_cy_ap_pending": is_pending_final_approval,
+            "is_complete": bool(ap_return_date or ap2_return_date),
+            # IFR (empty for MR/TBE)
+            "ifr_plan": None,
+            "ifr_forecast": None,
+            "ifr_submit_id": None,
+            "ifr_submit_date": None,
+            "ifr_actual": None,
+            "ifr_transmittal": None,
+            # IFA (Milestone 1: IFA A1)
+            "ifa_plan": ifa_plan,
+            "ifa_forecast": ifa_forecast,
+            "ifa_submit_id": ifa_submit_id,
+            "ifa_submit_date": ifa_submit_date,
+            "ifa_actual": ifa_actual,
+            "ifa_transmittal": ifa_transmittal,
+            # AFC (Milestone 2: IFA C1)
+            "afc_plan": afc_plan,
+            "afc_forecast": afc_forecast,
+            "afc_submit_id": afc_submit_id,
+            "afc_submit_date": afc_submit_date,
+            "afc_actual": afc_actual,
+            "afc_transmittal": afc_transmittal,
+            # AP Returns
+            "ap_plan": ap_plan,
+            "ap_forecast": ap_forecast,
+            "ap_return_code": ap_return_code,
+            "ap_return_date": ap_return_date,
+            "ap2_plan": ap2_plan,
+            "ap2_forecast": ap2_forecast,
+            "ap2_return_code": ap2_return_code,
+            "ap2_return_date": ap2_return_date,
         }
         documents.append(doc)
 
@@ -569,22 +756,38 @@ def extract_scurve(wb, sheet_name, label):
             "actual_cum":    act_cum,
         })
 
-    # Current-week summary snapshot (rows 12-16)
+    # Current-week summary snapshot (scans from row 12 dynamically)
     summary = []
-    for row in range(12, 17):
+    for row in range(12, 30):
         phase = safe_str(ws.cell(row=row, column=2).value)
-        if not phase:
+        if not phase or phase.startswith("="):
             continue
+        plan_incr = safe_float(ws.cell(row=row, column=5).value)
+        plan_cum  = safe_float(ws.cell(row=row, column=6).value)
+        fore_incr = safe_float(ws.cell(row=row, column=7).value)
+        fore_cum  = safe_float(ws.cell(row=row, column=8).value)
+        act_incr  = safe_float(ws.cell(row=row, column=9).value)
+        act_cum   = safe_float(ws.cell(row=row, column=10).value)
+
+        # Col 11 (K) is [b-a] = Actual Cum - Plan Cum (Non-Rebased Line)
+        dev_k = safe_float(ws.cell(row=row, column=11).value)
+        dev_non_rebased = dev_k if dev_k is not None else ((act_cum - plan_cum) if (act_cum is not None and plan_cum is not None) else None)
+        dev_rebased = (act_cum - fore_cum) if (act_cum is not None and fore_cum is not None) else None
+
         summary.append({
-            "phase":         phase,
-            "plan_incr":     safe_float(ws.cell(row=row, column=5).value),
-            "plan_cum":      safe_float(ws.cell(row=row, column=6).value),
-            "forecast_incr": safe_float(ws.cell(row=row, column=7).value),
-            "forecast_cum":  safe_float(ws.cell(row=row, column=8).value),
-            "actual_incr":   safe_float(ws.cell(row=row, column=9).value),
-            "actual_cum":    safe_float(ws.cell(row=row, column=10).value),
-            "deviation":     safe_float(ws.cell(row=row, column=11).value),
+            "phase":                 phase,
+            "plan_incr":             plan_incr,
+            "plan_cum":              plan_cum,
+            "forecast_incr":         fore_incr,
+            "forecast_cum":          fore_cum,
+            "actual_incr":           act_incr,
+            "actual_cum":            act_cum,
+            "dev_non_rebased":       dev_non_rebased,
+            "dev_rebased":           dev_rebased,
+            "deviation":             dev_non_rebased,
         })
+        if "TOTAL" in phase.upper():
+            break
 
     return {
         "label":   label,
@@ -628,27 +831,43 @@ def compute_delay_and_lookahead(all_documents, cutoff_date_str):
     delayed_type2_count = 0
 
     for doc in all_documents:
-        # Check each milestone: IFR, IFA, AFC
-        milestones = [
-            {
-                "milestone": "IFR",
-                "plan": doc.get("ifr_plan"),
-                "forecast": doc.get("ifr_forecast"),
-                "submit_date": doc.get("ifr_submit_date"),
-            },
-            {
-                "milestone": "IFA",
-                "plan": doc.get("ifa_plan"),
-                "forecast": doc.get("ifa_forecast"),
-                "submit_date": doc.get("ifa_submit_date"),
-            },
-            {
-                "milestone": "AFC",
-                "plan": doc.get("afc_plan"),
-                "forecast": doc.get("afc_forecast"),
-                "submit_date": doc.get("afc_submit_date"),
-            },
-        ]
+        # Check milestones: for MR/TBE vs standard engineering deliverables
+        if doc.get("is_mr_tbe"):
+            milestones = [
+                {
+                    "milestone": "IFA (A1)",
+                    "plan": doc.get("ifa_plan"),
+                    "forecast": doc.get("ifa_forecast"),
+                    "submit_date": doc.get("ifa_submit_date"),
+                },
+                {
+                    "milestone": "IFA (C1)",
+                    "plan": doc.get("afc_plan"),
+                    "forecast": doc.get("afc_forecast"),
+                    "submit_date": doc.get("afc_submit_date"),
+                },
+            ]
+        else:
+            milestones = [
+                {
+                    "milestone": "IFR",
+                    "plan": doc.get("ifr_plan"),
+                    "forecast": doc.get("ifr_forecast"),
+                    "submit_date": doc.get("ifr_submit_date"),
+                },
+                {
+                    "milestone": "IFA",
+                    "plan": doc.get("ifa_plan"),
+                    "forecast": doc.get("ifa_forecast"),
+                    "submit_date": doc.get("ifa_submit_date"),
+                },
+                {
+                    "milestone": "AFC",
+                    "plan": doc.get("afc_plan"),
+                    "forecast": doc.get("afc_forecast"),
+                    "submit_date": doc.get("afc_submit_date"),
+                },
+            ]
 
         for ms in milestones:
             plan_str = ms["plan"]
@@ -700,6 +919,7 @@ def compute_delay_and_lookahead(all_documents, cutoff_date_str):
                 "forecast_date": forecast_str,
                 "submit_date": submit_str,
                 "status": doc.get("status", ""),
+                "is_mr_tbe": doc.get("is_mr_tbe", False),
                 "is_slipping": is_slipping,
             }
 
@@ -771,15 +991,30 @@ def extract_all_data():
     for wp in WP_SHEETS:
         docs = extract_documents(wb, wp["sheet"], wp["label"])
         all_documents.extend(docs)
-        # Stats per WP
-        total = len(docs)
-        submitted = sum(1 for d in docs if d["status"] != "Not Yet Submitted")
+
+    # Documents from Procurement Engineering MR/TBE sheet
+    mr_tbe_docs = extract_mr_tbe_documents(wb)
+    all_documents.extend(mr_tbe_docs)
+
+    # Stats per WP (combining both standard engineering deliverables and MR/TBE)
+    for wp in WP_SHEETS:
+        wp_label = wp["label"]
+        wp_all = [d for d in all_documents if d["wp"] == wp_label]
+        total = len(wp_all)
+        submitted = sum(1 for d in wp_all if d["status"] != "Not Yet Submitted")
         not_submitted = total - submitted
-        doc_stats[wp["label"]] = {
+        pending_final_approval = sum(1 for d in wp_all if d.get("is_pending_final_approval"))
+        doc_stats[wp_label] = {
             "total": total,
             "submitted": submitted,
             "not_submitted": not_submitted,
+            "pending_final_approval": pending_final_approval,
+            "cy_ap_pending": pending_final_approval,
         }
+
+    pending_final_approval_total = sum(1 for d in all_documents if d.get("is_pending_final_approval"))
+    summary["pending_final_approval_count"] = pending_final_approval_total
+    summary["cy_ap_pending_count"] = pending_final_approval_total
 
     # Overdue
     overdue_summary = extract_overdue_summary(wb)
@@ -815,6 +1050,8 @@ def extract_all_data():
         "disciplines": disciplines,
         "wp_list": [wp["label"] for wp in WP_SHEETS],
         "total_documents": len(all_documents),
+        "pending_final_approval_count": pending_final_approval_total,
+        "cy_ap_pending_count": pending_final_approval_total,
         "last_updated": datetime.datetime.now().isoformat(),
     }
 
@@ -962,7 +1199,12 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
             docs = data.get("documents", [])
             cutoff = data.get("delay_lookahead", {}).get("cutoff_date", "unknown")
-            headers = ["doc_no", "title", "discipline", "wp", "class", "plan_pct", "actual_pct", "variance", "ifr_plan", "ifr_forecast", "ifr_submit_date", "ifa_plan", "ifa_forecast", "ifa_submit_date", "afc_plan", "afc_forecast", "afc_submit_date", "status"]
+            headers = [
+                "doc_no", "title", "discipline", "wp", "type", "plan_pct", "actual_pct", "variance",
+                "ifr_forecast", "ifr_submit_date", "ifa_forecast", "ifa_submit_date",
+                "afc_forecast", "afc_submit_date", "ap_forecast", "ap_return_code", "ap_return_date",
+                "status", "is_pending_final_approval"
+            ]
             
             # Create a simplified list of dicts for export because the backend dicts have exact keys
             excel_bytes = generate_excel_bytes(docs, headers)
@@ -1108,6 +1350,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     """Handle requests in separate threads."""
     daemon_threads = True
+    allow_reuse_address = True
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────

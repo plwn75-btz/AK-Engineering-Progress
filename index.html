@@ -115,6 +115,14 @@
                     </select>
                 </div>
                 <div class="filter-group">
+                    <label>Scope:</label>
+                    <select class="filter-select" id="filterScope" onchange="filterDocuments()">
+                        <option value="">All Scopes</option>
+                        <option value="eng">Engineering Deliverables</option>
+                        <option value="mr_tbe">MR / TBE (Procurement)</option>
+                    </select>
+                </div>
+                <div class="filter-group">
                     <label>Discipline:</label>
                     <select class="filter-select" id="filterDisc" onchange="filterDocuments()">
                         <option value="">All</option>
@@ -127,7 +135,20 @@
                         <option value="Not Yet Submitted">Not Yet Submitted</option>
                         <option value="IFR Submitted">IFR Submitted</option>
                         <option value="IFA Submitted">IFA Submitted</option>
+                        <option value="IFA (A1) Submitted">IFA (A1) Submitted</option>
+                        <option value="IFA (C1) Submitted">IFA (C1) Submitted</option>
                         <option value="AFC Submitted">AFC Submitted</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>PTTEPI Return:</label>
+                    <select class="filter-select" id="filterReturnStatus" onchange="filterDocuments()">
+                        <option value="">All</option>
+                        <option value="PENDING FINAL APPROVAL">Pending Final Approval</option>
+                        <option value="COMPLETE">Complete (AP Returned)</option>
+                        <option value="APPR">APPR (Approved)</option>
+                        <option value="APPR-C">APPR-C (Approved w/ Comments)</option>
+                        <option value="Issue Rev.X">Issue Rev.X (Re-issue)</option>
                     </select>
                 </div>
                 <div class="filter-group">
@@ -171,6 +192,9 @@
                                 <th>IFA Submit</th>
                                 <th>AFC Forecast</th>
                                 <th>AFC Submit</th>
+                                <th>AP Target</th>
+                                <th>Return Code</th>
+                                <th>Return from PTTEPI</th>
                                 <th>Status</th>
                             </tr>
                         </thead>
@@ -204,6 +228,8 @@
                         <option value="">All Milestones</option>
                         <option value="IFR">IFR</option>
                         <option value="IFA">IFA</option>
+                        <option value="IFA (A1)">IFA (A1)</option>
+                        <option value="IFA (C1)">IFA (C1)</option>
                         <option value="AFC">AFC</option>
                     </select>
                 </div>
@@ -328,7 +354,8 @@
                                 <th>Forecast Cum.</th>
                                 <th>Actual Incr.</th>
                                 <th>Actual Cum.</th>
-                                <th>Deviation</th>
+                                <th>Non-Rebased Line</th>
+                                <th>Rebased Line Variance</th>
                             </tr>
                         </thead>
                         <tbody id="scurveBody"></tbody>
