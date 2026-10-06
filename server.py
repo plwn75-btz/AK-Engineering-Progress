@@ -18,7 +18,14 @@ import threading
 import shutil
 import tempfile
 import io
+import warnings
+import gc
+import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
+
+# Suppress harmless openpyxl template/formatting warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 try:
     import openpyxl
@@ -35,6 +42,7 @@ except ImportError:
 
 BASE_DIR = Path(__file__).parent
 PORT = int(os.environ.get("PORT", 8081))
+CACHE_FILE = BASE_DIR / "data_cache.json"
 
 # Work Package sheet configurations
 WP_SHEETS = [
@@ -52,8 +60,30 @@ SCURVE_SHEETS = [
     {"sheet": "Eng. S-Curve_WP02 JACKET", "label": "WP02 Jacket"},
 ]
 
+NEEDED_SHEET_NAMES = {
+    "Sum",
+    "Weekly Summary",
+    "WP01 TOPSIDE",
+    "WP01 JACKET",
+    "WP02 TOPSIDE",
+    "WP02 JACKET",
+    "PRO.ENGINEERING_MR TBE",
+    "Overdue Summary",
+    "Overdue List",
+    "Eng. S-Curve_OVERALL",
+    "Eng. S-Curve_WP01 TOPSIDE",
+    "Eng. S-Curve_WP01 JACKET",
+    "Eng. S-Curve_WP02 TOPSIDE",
+    "Eng. S-Curve_WP02 JACKET",
+}
+
 # Data cache
-_data_cache = {"data": None, "lock": threading.Lock(), "file": None}
+_data_cache = {
+    "data": None, 
+    "lock": threading.Lock(), 
+    "file": None,
+    "is_extracting": False
+}
 
 
 # ─── File Detection ──────────────────────────────────────────────────────────
@@ -115,6 +145,117 @@ def find_latest_excel():
         valid.sort(key=lambda f: f.stat().st_mtime, reverse=True)
         return valid[0]
     return None
+
+
+# ─── Caching & Memory Optimization ──────────────────────────────────────────
+
+def get_file_fingerprint(filepath):
+    """Return a unique fingerprint based on filename, size, and mtime."""
+    p = Path(filepath)
+    if not p.exists():
+        return None
+    stat = p.stat()
+    return f"{p.name}_{stat.st_size}_{int(stat.st_mtime)}"
+
+
+def load_disk_cache(excel_file):
+    """Load cached JSON data if it exists and matches the Excel file fingerprint."""
+    if not CACHE_FILE.exists() or not excel_file:
+        return None
+    try:
+        current_fp = get_file_fingerprint(excel_file)
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            cached_payload = json.load(f)
+        if cached_payload.get("_fingerprint") == current_fp:
+            print(f"  [Cache] Loaded precomputed JSON cache from {CACHE_FILE.name} (Instant cold-boot)")
+            return cached_payload.get("data")
+    except Exception as e:
+        print(f"  [Cache] Warning: Could not read cache: {e}")
+    return None
+
+
+def save_disk_cache(excel_file, data):
+    """Save extracted data to disk cache."""
+    if not excel_file or not data:
+        return
+    try:
+        current_fp = get_file_fingerprint(excel_file)
+        payload = {
+            "_fingerprint": current_fp,
+            "cached_at": datetime.datetime.now().isoformat(),
+            "data": data
+        }
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, default=str)
+        print(f"  [Cache] Saved extracted JSON cache to {CACHE_FILE.name}")
+    except Exception as e:
+        print(f"  [Cache] Warning: Could not write cache: {e}")
+
+
+def load_trimmed_workbook(excel_path):
+    """
+    Load an Excel workbook keeping ONLY the sheets required by the dashboard.
+    Bypasses huge unused raw database sheets (such as MDR with 22MB XML and calcChain with 17MB XML),
+    reducing peak memory from >430MB down to ~230MB to stay safely within 512MB RAM environments (e.g. Render).
+    """
+    excel_path = Path(excel_path)
+    t0 = datetime.datetime.now()
+
+    with zipfile.ZipFile(excel_path, 'r') as src_zip:
+        file_list = src_zip.namelist()
+
+        # Check if workbook.xml exists
+        if 'xl/workbook.xml' not in file_list or 'xl/_rels/workbook.xml.rels' not in file_list:
+            return openpyxl.load_workbook(str(excel_path), data_only=True)
+
+        wb_xml = src_zip.read('xl/workbook.xml')
+        tree = ET.fromstring(wb_xml)
+        ns = {
+            'main': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main',
+            'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+        }
+
+        rels_xml = src_zip.read('xl/_rels/workbook.xml.rels')
+        rels_tree = ET.fromstring(rels_xml)
+        rel_ns = {'rel': 'http://schemas.openxmlformats.org/package/2006/relationships'}
+
+        rid_to_target = {}
+        for rel in rels_tree.findall('.//rel:Relationship', rel_ns):
+            rid_to_target[rel.get('Id')] = rel.get('Target')
+
+        keep_files = set()
+        sheets_node = tree.find('.//main:sheets', ns)
+        if sheets_node is not None:
+            for s in list(sheets_node):
+                name = s.get('name')
+                rid = s.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
+                target = rid_to_target.get(rid, '')
+                if name in NEEDED_SHEET_NAMES:
+                    keep_files.add('xl/' + target)
+                else:
+                    sheets_node.remove(s)
+
+        new_wb_xml = ET.tostring(tree, xml_declaration=True, encoding='utf-8')
+
+        out_bio = io.BytesIO()
+        with zipfile.ZipFile(out_bio, 'w', compression=zipfile.ZIP_DEFLATED) as dst_zip:
+            for item in src_zip.infolist():
+                if item.filename == 'xl/workbook.xml':
+                    dst_zip.writestr(item, new_wb_xml)
+                elif item.filename.startswith('xl/worksheets/'):
+                    if item.filename in keep_files:
+                        dst_zip.writestr(item, src_zip.read(item.filename))
+                elif item.filename == 'xl/calcChain.xml':
+                    # Omit massive formula dependency chain (saves 17MB XML)
+                    continue
+                else:
+                    dst_zip.writestr(item, src_zip.read(item.filename))
+
+        out_bio.seek(0)
+        wb = openpyxl.load_workbook(out_bio, data_only=True)
+        dur = (datetime.datetime.now() - t0).total_seconds()
+        print(f"  [Memory Opt] Loaded trimmed workbook (14 sheets) in {dur:.2f}s")
+        return wb
 
 
 # ─── Helper Functions ─────────────────────────────────────────────────────────
@@ -970,14 +1111,21 @@ def compute_delay_and_lookahead(all_documents, cutoff_date_str):
 
 # ─── Main Extraction ──────────────────────────────────────────────────────────
 
-def extract_all_data():
-    """Read the Excel file and extract all dashboard data."""
-    excel_file = find_latest_excel()
-    if not excel_file:
+def extract_all_data(excel_path=None, force_reload=False):
+    """Read the Excel file and extract all dashboard data with memory optimization & disk caching."""
+    excel_file = Path(excel_path) if excel_path else find_latest_excel()
+    if not excel_file or not excel_file.exists():
         return {"error": "No Excel file found in the project directory."}
 
-    print(f"  [Data] Loading: {excel_file.name}")
-    wb = openpyxl.load_workbook(str(excel_file), data_only=True)
+    # 1. Try disk cache first unless forced
+    if not force_reload:
+        cached_data = load_disk_cache(excel_file)
+        if cached_data is not None:
+            _data_cache["file"] = excel_file.name
+            return cached_data
+
+    print(f"  [Data] Extracting from: {excel_file.name}")
+    wb = load_trimmed_workbook(excel_file)
 
     # Summary
     summary = extract_summary(wb, excel_file.name)
@@ -1034,10 +1182,12 @@ def extract_all_data():
     disciplines = sorted(set(d["discipline"] for d in all_documents if d["discipline"]))
 
     wb.close()
+    del wb
+    gc.collect()
 
     _data_cache["file"] = excel_file.name
 
-    return {
+    result = {
         "file_name": excel_file.name,
         "summary": summary,
         "weekly_summary": weekly,
@@ -1054,6 +1204,11 @@ def extract_all_data():
         "cy_ap_pending_count": pending_final_approval_total,
         "last_updated": datetime.datetime.now().isoformat(),
     }
+
+    # 3. Save to disk cache for instantaneous cold-boot
+    save_disk_cache(excel_file, result)
+
+    return result
 
 def generate_excel_bytes(data_list, headers):
     """Generate Excel file in memory and return bytes."""
@@ -1121,14 +1276,33 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
 
     def send_api_data(self):
-        """Return cached data."""
+        """Return cached data or wait/return loading state."""
         try:
             with _data_cache["lock"]:
                 data = _data_cache["data"]
+                is_extracting = _data_cache.get("is_extracting", False)
+
             if data is None:
-                data = extract_all_data()
-                with _data_cache["lock"]:
-                    _data_cache["data"] = data
+                if is_extracting:
+                    response = {
+                        "status": "loading",
+                        "message": "Data extraction from Excel is currently in progress. Please wait a moment..."
+                    }
+                    json_bytes = json.dumps(response).encode("utf-8")
+                    self.send_response(202)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Content-Length", len(json_bytes))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(json_bytes)
+                    return
+                else:
+                    with _data_cache["lock"]:
+                        _data_cache["is_extracting"] = True
+                    data = extract_all_data()
+                    with _data_cache["lock"]:
+                        _data_cache["data"] = data
+                        _data_cache["is_extracting"] = False
 
             json_bytes = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(200)
@@ -1138,6 +1312,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json_bytes)
         except Exception as e:
+            with _data_cache["lock"]:
+                _data_cache["is_extracting"] = False
             import traceback
             traceback.print_exc()
             self._send_error(500, str(e))
@@ -1146,9 +1322,12 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         """Force re-read Excel file."""
         try:
             print("\n  [API] Refreshing data from Excel file...")
-            new_data = extract_all_data()
+            with _data_cache["lock"]:
+                _data_cache["is_extracting"] = True
+            new_data = extract_all_data(force_reload=True)
             with _data_cache["lock"]:
                 _data_cache["data"] = new_data
+                _data_cache["is_extracting"] = False
             print(f"  [API] Refresh complete. File: {new_data.get('file_name', '?')}, Docs: {new_data.get('total_documents', '?')}")
 
             json_bytes = json.dumps(new_data, ensure_ascii=False, default=str).encode("utf-8")
@@ -1159,6 +1338,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json_bytes)
         except Exception as e:
+            with _data_cache["lock"]:
+                _data_cache["is_extracting"] = False
             import traceback
             traceback.print_exc()
             self._send_error(500, str(e))
@@ -1306,9 +1487,12 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             print(f"\n  [Upload] Saved: {filename} ({len(file_data)} bytes)")
 
             # Refresh data with the new file
-            new_data = extract_all_data()
+            with _data_cache["lock"]:
+                _data_cache["is_extracting"] = True
+            new_data = extract_all_data(excel_path=dest, force_reload=True)
             with _data_cache["lock"]:
                 _data_cache["data"] = new_data
+                _data_cache["is_extracting"] = False
             print(f"  [Upload] Data refreshed. Docs: {new_data.get('total_documents', '?')}")
 
             response = {
@@ -1326,6 +1510,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json_bytes)
 
         except Exception as e:
+            with _data_cache["lock"]:
+                _data_cache["is_extracting"] = False
             import traceback
             traceback.print_exc()
             self._send_error(500, str(e))
@@ -1359,12 +1545,22 @@ def preload_data():
     print("\n  [Background] Pre-loading Excel data...")
     try:
         with _data_cache["lock"]:
-            if _data_cache["data"] is None:
-                _data_cache["data"] = extract_all_data()
-        total = _data_cache["data"].get("total_documents", "?")
-        fname = _data_cache["data"].get("file_name", "?")
+            if _data_cache["data"] is not None:
+                return
+            _data_cache["is_extracting"] = True
+
+        data = extract_all_data()
+
+        with _data_cache["lock"]:
+            _data_cache["data"] = data
+            _data_cache["is_extracting"] = False
+
+        total = data.get("total_documents", "?")
+        fname = data.get("file_name", "?")
         print(f"  [Background] Loaded: {fname} — {total} documents\n")
     except Exception as e:
+        with _data_cache["lock"]:
+            _data_cache["is_extracting"] = False
         print(f"  [Background] Warning: Could not pre-load data: {e}\n")
 
 

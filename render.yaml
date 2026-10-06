@@ -1,4 +1,4 @@
-﻿services:
+services:
   - type: web
     name: engineering-progress-dashboard
     env: python
@@ -7,3 +7,5 @@
     envVars:
       - key: PYTHONUNBUFFERED
         value: "true"
+      - key: PYTHON_VERSION
+        value: "3.11.9"

@@ -24,8 +24,20 @@ async function fetchData() {
     showLoading(true);
     try {
         const response = await fetch('/api/data');
+        if (response.status === 202) {
+            const data = await response.json();
+            showToast(data.message || 'Extracting data from Excel...', 'info');
+            setTimeout(fetchData, 3000);
+            return;
+        }
         if (!response.ok) throw new Error(`HTTP error ${response.status}`);
         const data = await response.json();
+
+        if (data.status === 'loading') {
+            showToast(data.message || 'Extracting data from Excel...', 'info');
+            setTimeout(fetchData, 3000);
+            return;
+        }
         
         if (data.error) {
             showToast('Error: ' + data.error, 'error');
@@ -39,7 +51,9 @@ async function fetchData() {
         console.error('Failed to load data:', err);
         showToast('Failed to load dashboard data: ' + err.message, 'error');
     } finally {
-        showLoading(false);
+        if (DASHBOARD_DATA) {
+            showLoading(false);
+        }
     }
 }
 

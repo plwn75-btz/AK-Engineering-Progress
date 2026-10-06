@@ -1,8 +1,8 @@
 # Aung Sinkha Development Project Phase 1A (EPC-01)
 ## Engineering Progress Tracking & Analytics Dashboard — Technical & Operational Handoff Report
 
-**Last Updated:** 17 Aug 2026
-**Version:** 2.2
+**Last Updated:** 06 Oct 2026
+**Version:** 2.5
 
 ---
 
@@ -11,17 +11,18 @@
 ### 1.1 Background & Purpose
 In complex Offshore & Onshore Engineering, Procurement, and Construction (EPC) projects, tracking engineering deliverables across thousands of individual documents, multiple Work Packages (WPs), and diverse engineering disciplines is critical to preventing project slippage.
 
-The **Engineering Progress Tracking & Analytics Dashboard** was developed to replace static, manual spreadsheet reporting with an automated, high-performance, real-time web application. It ingests weekly Master Document Register (MDR) Excel cut-offs from project contractors (GCME / PJM) and transforms raw tabular records into actionable executive insights, dual variance reporting (**Rebased Line Variance** & **Non-Rebased Line**), S-Curve time-series variance analysis, granular discipline delays, procurement engineering (MR/TBE) tracking, and proactive 14-day lookahead warning alerts.
+The **Engineering Progress Tracking & Analytics Dashboard** was developed to replace static, manual spreadsheet reporting with an automated, high-performance, real-time web application. It ingests weekly Master Document Register (MDR) Excel cut-offs from project contractors (GCME / PJM) and transforms raw tabular records into actionable executive insights, dual variance reporting (**Rebased Line Variance** & **Non-Rebased Line**), S-Curve time-series variance analysis, granular discipline delays, procurement engineering (MR/TBE) tracking, approval tracking (**PENDING FINAL APPROVAL** and **COMPLETE**), and proactive 14-day lookahead warning alerts.
 
 ### 1.2 Target Audience & Stakeholders
 - **Project Director & EPC Project Managers:** High-level visibility into overall engineering progress (Plan vs. Actual vs. Forecast/Rebaseline), dual variance indicators, Schedule Performance Indexes (SPI), and macro-level slippage.
 - **Engineering Managers & Discipline Leads:** Granular tracking of document submission statuses across Process, Piping, Mechanical, Electrical, Civil/Structural, and Instrumentation disciplines.
 - **Project Controls & Planning Engineers (PJM/PTTEPI):** Automated extraction and validation of weekly MDR cut-offs, S-Curve generation, and audit compliance against baseline and rebaseline milestones.
-- **Document Controllers:** Real-time register monitoring, document search, and tracking of overdue reviews.
+- **Document Controllers:** Real-time register monitoring, document search, and tracking of overdue reviews and approvals.
 
 ### 1.3 High-Level Architecture
-- **Backend (`server.py`):** Pure Python 3.11 threaded HTTP server utilizing `openpyxl`, in-memory thread-safe caching, native Excel report generator (`/api/export/*`), RESTful API (`/api/data`, `/api/upload`, `/api/refresh`).
-- **Frontend (`index.html`, `app.js`, `styles.css`):** Vanilla HTML5/CSS3/ES6 SPA with dark glassmorphism UI, 7-card executive KPI summary, Scope & Milestone filters, and powered by Chart.js for interactive data visualization.
+- **Backend (`server.py`):** Pure Python 3.11 threaded HTTP server utilizing `openpyxl` with selective sheet trimming (`load_trimmed_workbook`), in-memory and disk caching (`data_cache.json`), native Excel report generator (`/api/export/*`), RESTful API (`/api/data`, `/api/upload`, `/api/refresh`).
+- **Frontend (`index.html`, `app.js`, `styles.css`):** Vanilla HTML5/CSS3/ES6 SPA with dark glassmorphism UI, 7-card executive KPI summary, Scope & Milestone filters, retry polling on 202, and powered by Chart.js for interactive data visualization.
+- **Cloud Deployment (`render.yaml`, `.python-version`):** Pre-configured Render blueprint pinned to Python 3.11.9, engineered to operate smoothly within 512MB RAM constraints.
 
 ---
 
@@ -80,6 +81,8 @@ The system tracks engineering progress via a single Excel file per cut-off perio
 | REQ-09 | Dynamic Weekly Column | S-Curve auto-expands as new weeks added | Scans `ws.max_column` dynamically — zero hardcoded limits | PASS |
 | REQ-10 | Dual Variance Metrics | Rebased Line Variance vs Non-Rebased Line | Implemented across Overall Summary, WP Summary, Weekly, and S-Curve tabs | PASS |
 | REQ-11 | Procurement Deliverables | Ingest `PRO.ENGINEERING_MR TBE` (350 MR/TBE items) | Integrated into Document Status, Overdue & Look-ahead, and Exports (1,789 Total) | PASS |
+| REQ-12 | Approval Bottleneck Tracking | PENDING FINAL APPROVAL (400 items) | Strict logic: `ENG 262 / MR 116 / TBE 22` | PASS |
+| REQ-13 | Completion & Closure Rates | COMPLETE status chip & filter (398 items) | Scope breakdown: `ENG 301 (20.9%) / MR 53 (30.3%) / TBE 44 (25.1%)` | PASS |
 
 ---
 

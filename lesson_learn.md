@@ -242,3 +242,38 @@ Implemented the **`COMPLETE`** stat chip in `renderDocStatsRow` and filter in `i
 
 **Lesson:**
 Presenting completion counts alongside scope percentage completion rates (`ENG XX (XX%) / MR XX (XX%) / TBE XX (XX%)`) provides an immediate, high-level gauge of closure velocity across engineering and procurement streams.
+
+---
+
+### LL-17: Cloud Deployment Manifest (Render & GitHub)
+
+**Problem:**
+Deploying a self-contained Python web application with openpyxl and static frontend to cloud platforms (like Render) requires explicit dependency declaration and port binding to avoid launch failures.
+
+**Solution:**
+1. Created `requirements.txt` (`openpyxl>=3.1.0`).
+2. Configured `render.yaml` with `buildCommand: pip install -r requirements.txt` and `startCommand: python server.py`.
+3. In `server.py`, dynamically bound `PORT` to `int(os.environ.get("PORT", 8081))` and enabled `allow_reuse_address = True` on `ThreadedHTTPServer`.
+4. Maintained clean `.gitignore` to prevent `__pycache__`, local scratch, and backup folders from entering repository branches.
+
+**Lesson:**
+Always ensure cloud web services dynamically bind to host-injected `PORT` variables and bundle a baseline data file so initial deployments bootstrap immediately into a fully operational state.
+
+---
+
+### LL-18: Render 512MB RAM OOM Mitigation via Selective Sheet Extraction & JSON Disk Caching
+
+**Problem:**
+When uploading large weekly MDR Excel files (e.g. `Cut off 02-Oct-26.xlsx`, ~10MB zip containing 86.9MB uncompressed XML across 26 worksheets), the cloud application on Render crashed with `HTTP 502: Bad Gateway`. The logs stopped abruptly while reading worksheet XML (`_reader.py:329`).
+
+**Root Cause:**
+`openpyxl.load_workbook(data_only=True)` loads every single worksheet in the archive into Python memory at once. Unused massive sheets like `MDR` (22.2MB raw XML), `calcChain.xml` (17.4MB), and `MDR_Return` (5.5MB) inflated the Python heap past 433MB, driving container RSS memory above Render's free tier 512MB RAM limit and triggering the Linux kernel Out-Of-Memory (OOM) Killer.
+
+**Solution:**
+1. **Selective Sheet Ingestion (`load_trimmed_workbook`)**: Bypassed unneeded sheets directly in the zip container before openpyxl parsing. Loading only the 14 sheets required by the dashboard dropped virtual workbook size to 3.59MB and peak RAM to 239MB (well below the 512MB ceiling).
+2. **JSON Disk Cache (`data_cache.json`)**: Serialized extracted data to disk stamped with the source file fingerprint. Cold starts and container restarts now load in **0.13 seconds** and consume only **15MB RAM** without running openpyxl.
+3. **Concurrency & Loading Status**: Introduced `is_extracting` state. During background extraction, `/api/data` responds with HTTP 202 (`{"status": "loading"}`) and `app.js` polls every 3s rather than blocking or triggering duplicate extractions.
+4. **Environment Pinning**: Pinned Python version to `3.11.9` in `render.yaml` and `.python-version`, and filtered cosmetic openpyxl `UserWarning` entries.
+
+**Lesson:**
+For memory-constrained serverless/PaaS platforms (e.g. Render 512MB), never load full Excel workbooks if raw database/log sheets exist in the file. Filter the ZIP archive to required sheets and cache precomputed JSON payloads to decouple web response times and memory usage from workbook sizes.
