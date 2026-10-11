@@ -1,13 +1,15 @@
 # Handoff: Engineering Progress Tracking & Analytics Dashboard (Phase 1A EPC-01)
-**Last Updated:** 06 Oct 2026 | **Version:** 2.5
+**Last Updated:** 10 Oct 2026 | **Version:** 2.7
 
 ---
 
 ## 1. Executive Summary
 - **Objective**: Maintain and enhance the real-time Engineering Progress Tracking & Analytics Dashboard replacing static spreadsheet reporting (MDR Excel cut-offs).
 - **Current Status**: Fully operational. Ingests `MM-ASK-1A-GEN01-ENG-MDR-0001_B1_Cut off 02-Oct-26.xlsx`. Supports dual variance tracking (**Rebased Line Variance** & **Non-Rebased Line**). Ingests standard engineering deliverables alongside all 350 MR/TBE procurement deliverables (Total: **1,793 deliverables**). Implements strict **PENDING FINAL APPROVAL** and **COMPLETE** lifecycle tracking.
+- **Dynamic Milestone Mapping**: Fully resilient against contractor column insertions (e.g. `FORECAST` column inserted in `02-Oct-26`). Dynamic header detection (`detect_milestone_columns`) prevents column shifts and false delay categorizations (LL-19).
 - **Memory Optimization & PaaS Cloud Readiness**: Selective sheet ingestion (`load_trimmed_workbook`) reduces peak RAM from >430MB to 239MB (safely below Render 512MB limit). Fast disk caching (`data_cache.json`) achieves 0.13s cold starts with ~15MB RAM.
-- **Recipient Action**: Use `HANDOFF_REPORT.md` as the technical source of truth. Use `spec.md` for system behaviour specification. Use `lesson_learn.md` for known gotchas (including LL-18).
+- **Native Styled Excel Exports**: Fully resilient `.xlsx` downloads with RFC 6266 headers, client-side download attributes, and openpyxl formatting (LL-20).
+- **Recipient Action**: Use `HANDOFF_REPORT.md` as the technical source of truth. Use `spec.md` for system behaviour specification. Use `lesson_learn.md` for known gotchas (including LL-18, LL-19 & LL-20).
 
 ---
 
@@ -15,9 +17,9 @@
 
 | Layer | File | Description |
 |:---|:---|:---|
-| Backend | `server.py` | Python 3.11 threaded HTTP server, openpyxl selective trimmed parser, memory-optimized disk cache (`data_cache.json`), REST API, native Excel export generation |
+| Backend | `server.py` | Python 3.11 threaded HTTP server, openpyxl selective trimmed parser, memory-optimized disk cache (`data_cache.json`), REST API, native styled Excel export generation |
 | Frontend JS | `app.js` | Vanilla ES6 SPA controller, Chart.js S-Curve & bar charts, dual variance renderers, MR/TBE badge and filters, PENDING FINAL APPROVAL and COMPLETE tracking, retry polling |
-| Frontend HTML | `index.html` | 5-tab shell: Summary / Work Packages / Documents / Overdue / S-Curve |
+| Frontend HTML | `index.html` | 5-tab shell: Summary / Work Packages / Documents / Overdue / S-Curve, hardened `.xlsx` download links |
 | Frontend CSS | `styles.css` | Glassmorphism dark mode, HSL accent palette, responsive layout, MR/TBE badges, approval & complete status badges |
 | Cloud Deploy | `render.yaml`, `.python-version` | Render web service blueprint pinned to Python 3.11.9 |
 
@@ -25,7 +27,7 @@
 - `GET /api/data` — Returns full JSON payload (cached in memory & on disk; 202 response if initial extraction in progress)
 - `POST /api/upload` — Accepts multipart `.xlsx` upload, parses with memory optimization, regenerates cache
 - `GET /api/refresh` — Forces re-read from disk of latest Excel file
-- `GET /api/export/documents`, `/api/export/lookahead`, `/api/export/delayed` — Native Excel export downloads
+- `GET /api/export/documents.xlsx`, `/api/export/lookahead.xlsx`, `/api/export/delayed.xlsx` — Native styled Excel export downloads (also supports extensionless routes)
 
 ---
 
@@ -66,6 +68,8 @@ Cut-off date is read from **Excel cell `Sum!D9`** (`2026-08-14`) — NOT from th
 - [x] Approval Status: Implemented **PENDING FINAL APPROVAL** tracking (400 items: `ENG 262 / MR 116 / TBE 22`)
 - [x] Completion Status: Implemented **COMPLETE** tracking (398 items: `ENG 301 (20.9%) / MR 53 (30.3%) / TBE 44 (25.1%)`)
 - [x] Return Code Sanitization: Purged `00:00:00` time artifacts from return code columns
+- [x] Dynamic Milestone Mapping (LL-19): Scanned milestone group and subheader labels to support newly inserted `FORECAST` template columns without column shift bugs or phantom dates
+- [x] Excel Export Hardening & Styling (LL-20): Upgraded export routes to `.xlsx`, added explicit client download attributes, sanitized `Content-Disposition` headers, and styled openpyxl workbooks (navy headers, borders, freeze panes, auto column sizing)
 
 ---
 
@@ -73,13 +77,13 @@ Cut-off date is read from **Excel cell `Sum!D9`** (`2026-08-14`) — NOT from th
 
 | File | Role |
 |:---|:---|
-| `server.py` | Backend: extract_summary (dual variance), extract_documents, extract_mr_tbe_documents, compute_delay_and_lookahead, exports |
+| `server.py` | Backend: extract_summary (dual variance), extract_documents, extract_mr_tbe_documents, compute_delay_and_lookahead, styled `.xlsx` exports |
 | `app.js` | Frontend: renderSummaryTab (7 KPI cards), renderWPSummaryTable, renderWeeklyTab, renderDocumentsTab (Scope filter, MR/TBE badges, PENDING FINAL APPROVAL, COMPLETE chip), renderOverdueTab |
-| `index.html` | HTML shell with 5-tab nav, modals, Scope filter, COMPLETE filter option |
+| `index.html` | HTML shell with 5-tab nav, modals, Scope filter, COMPLETE filter option, explicit `.xlsx` download links |
 | `styles.css` | CSS: glassmorphism, responsive .kpi-grid, MR/TBE badges, pending final approval and complete badges |
 | `HANDOFF_REPORT.md` | Comprehensive technical handoff (v2.4) |
 | `spec.md` | System functional specification |
-| `lesson_learn.md` | Documented lessons learned (LL-01 to LL-16) |
+| `lesson_learn.md` | Documented lessons learned (LL-01 to LL-20) |
 
 ---
 

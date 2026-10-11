@@ -1,8 +1,8 @@
 # Aung Sinkha Development Project Phase 1A (EPC-01)
 ## Engineering Progress Tracking & Analytics Dashboard — Technical & Operational Handoff Report
 
-**Last Updated:** 06 Oct 2026
-**Version:** 2.5
+**Last Updated:** 10 Oct 2026
+**Version:** 2.7
 
 ---
 
@@ -83,6 +83,9 @@ The system tracks engineering progress via a single Excel file per cut-off perio
 | REQ-11 | Procurement Deliverables | Ingest `PRO.ENGINEERING_MR TBE` (350 MR/TBE items) | Integrated into Document Status, Overdue & Look-ahead, and Exports (1,789 Total) | PASS |
 | REQ-12 | Approval Bottleneck Tracking | PENDING FINAL APPROVAL (400 items) | Strict logic: `ENG 262 / MR 116 / TBE 22` | PASS |
 | REQ-13 | Completion & Closure Rates | COMPLETE status chip & filter (398 items) | Scope breakdown: `ENG 301 (20.9%) / MR 53 (30.3%) / TBE 44 (25.1%)` | PASS |
+| REQ-14 | PaaS 512MB RAM Optimization | Ingest large weekly files (<512MB RAM) | `load_trimmed_workbook()` filters 14 needed sheets; peak RAM drops from 433MB to 239MB | PASS |
+| REQ-15 | Instant Cold Boot & Disk Cache | Sub-second restart without openpyxl re-parse | `data_cache.json` loads in 0.13s with ~15MB RAM | PASS |
+| REQ-16 | Dynamic Milestone Columns (LL-19) | Resilient against inserted template columns (`FORECAST`) | `detect_milestone_columns()` dynamically maps group spans and subheaders; strict date sanitization | PASS |
 
 ---
 
@@ -132,6 +135,13 @@ else:
 - SPI_Cumulative = Actual_Cumulative / Plan_Cumulative
 - SPI > 1.00: Ahead of schedule | SPI = 1.00: On schedule | SPI < 1.00: Behind schedule
 
+### 4.4 Memory Optimization & PaaS Cloud Ingestion Architecture
+To prevent container OOM termination on 512MB RAM platforms (such as Render free tier) when processing 10MB+ weekly Excel files containing 86+ MB of uncompressed XML:
+1. **Selective Sheet Ingestion (`load_trimmed_workbook`)**: The backend intercepts the `.xlsx` ZIP container before openpyxl parsing. It dynamically retains only the 14 sheets required by the dashboard (`Sum`, `Weekly Summary`, `WP01/WP02 Topside & Jacket`, `PRO.ENGINEERING_MR TBE`, `Overdue Summary`, `Overdue List`, and 5 `Eng. S-Curve_*` sheets). Massive raw database sheets (`MDR` 22.2MB XML, `calcChain.xml` 17.4MB, `MDR_Return` 5.5MB) are stripped out, dropping virtual workbook size to 3.59MB and peak RAM to **239.87 MB**.
+2. **Precomputed JSON Disk Cache (`data_cache.json`)**: Extracted data is serialized to disk with a file fingerprint (`name_size_mtime`). Subsequent server boots or container restarts load in **0.13 seconds** and consume only **15 MB RAM** without re-invoking openpyxl.
+3. **HTTP 202 Polling Guard**: During initial background extraction, `/api/data` responds with HTTP 202 (`{"status": "loading"}`) allowing `app.js` to poll without triggering concurrent duplicate extractions.
+4. **Environment Pinning**: Explicitly declared `PYTHON_VERSION: 3.11.9` in `render.yaml` and `.python-version`.
+
 ---
 
 ## 5. Operational Guide
@@ -148,7 +158,7 @@ python server.py
 2. Click "Update Data" button (or the server auto-detects on next API request).
 3. Dashboard refreshes: updated cut-off date, S-Curves, delay counts, lookahead.
 
-> TIP: Always include the cut-off date in the filename (e.g., "Cut off 10-Jul-26") so `find_latest_excel()` can auto-select the correct file.
+> TIP: Always include the cut-off date in the filename (e.g., "Cut off 02-Oct-26") so `find_latest_excel()` can auto-select the correct file.
 
 ### 5.3 Audit Verification
 ```powershell
@@ -161,11 +171,16 @@ python -c "import server; d=server.extract_all_data(); print('Cutoff:', d['summa
 
 | File | Status | Description |
 |:---|:---:|:---|
-| `server.py` | DONE | Thread-safe backend, S-Curve time-series, Type 3.1/3.2 delay, dynamic column scanning |
-| `app.js` | DONE | S-Curve rendering from time-series, summary table, 4-digit year dates |
-| `index.html` | DONE | 5-tab SPA: Summary, Work Packages, Documents, Overdue Analysis, S-Curve |
+| `server.py` | DONE | Thread-safe backend, memory-optimized trimmed loader, JSON disk cache, S-Curve time-series, styled openpyxl Excel exports |
+| `app.js` | DONE | S-Curve rendering from time-series, summary table, 4-digit year dates, HTTP 202 retry polling |
+| `index.html` | DONE | 5-tab SPA: Summary, Work Packages, Documents, Overdue Analysis, S-Curve, hardened .xlsx export links |
 | `styles.css` | DONE | Glassmorphism dark mode, full filename badge, responsive layout |
-| `HANDOFF_REPORT.md` | DONE | This document (v2.0) |
-| `handoff.md` | DONE | Agent-facing quick handoff |
+| `data_cache.json` | DONE | Precomputed extracted JSON for 0.13s cold boot (<15MB RAM) |
+| `render.yaml` | DONE | PaaS deployment manifest pinned to Python 3.11.9 |
+| `.python-version` | DONE | Python runtime pinning (3.11.9) |
+| `HANDOFF_REPORT.md` | DONE | This document (v2.7) |
+| `handoff.md` | DONE | Agent-facing quick handoff (v2.7) |
 | `spec.md` | DONE | System specification |
-| `lesson_learn.md` | DONE | Lessons learned & known gotchas |
+| `lesson_learn.md` | DONE | Lessons learned & known gotchas (LL-01 to LL-20) |
+| `README.md` | DONE | Project overview & Render deployment guide |
+

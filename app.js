@@ -1491,13 +1491,18 @@ function formatPct(val) {
 }
 
 function formatDate(dateStr) {
-    if (!dateStr || dateStr === 'N/A' || dateStr === '-') return '—';
+    if (!dateStr || dateStr === 'N/A' || dateStr === '-' || dateStr === 'None') return '—';
+    const str = String(dateStr).trim();
+    // Defensive check: Only accept valid ISO (YYYY-MM-DD) or standard text dates (DD-Mon-YY / DD-Mon-YYYY)
+    if (!/^\d{4}-\d{2}-\d{2}/.test(str) && !/^\d{1,2}[-\s][A-Za-z]{3}[-\s]\d{2,4}/.test(str)) {
+        return '—';
+    }
     try {
-        const dt = new Date(dateStr);
-        if (isNaN(dt.getTime()) || dt.getFullYear() < 1950) return '—';
+        const dt = new Date(str);
+        if (isNaN(dt.getTime()) || dt.getFullYear() < 1950 || dt.getFullYear() > 2050) return '—';
         return dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
     } catch {
-        return dateStr;
+        return '—';
     }
 }
 

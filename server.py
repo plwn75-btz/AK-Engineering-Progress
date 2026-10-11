@@ -30,13 +30,14 @@ warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 try:
     import openpyxl
     from openpyxl.utils import get_column_letter
-    from openpyxl.styles import Font
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 except ImportError:
     print("Installing openpyxl...")
     import subprocess
     subprocess.check_call(["pip", "install", "openpyxl"])
     import openpyxl
     from openpyxl.utils import get_column_letter
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -301,9 +302,32 @@ def safe_date(val):
         # time(0,0) means empty in this Excel
         return None
     s = str(val).strip()
-    if not s or s in ("0", "N/A", "-"):
+    if not s or s in ("0", "N/A", "-", "None", "#N/A", "#REF!", "#VALUE!"):
         return None
-    return s
+    # Validate ISO date string (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
+    iso_match = re.match(r'^(\d{4})-(\d{2})-(\d{2})', s)
+    if iso_match:
+        try:
+            y, m, d = int(iso_match.group(1)), int(iso_match.group(2)), int(iso_match.group(3))
+            if 1950 <= y <= 2100:
+                return f"{y:04d}-{m:02d}-{d:02d}"
+        except ValueError:
+            pass
+    # Pattern: DD-Mon-YY or DD-Mon-YYYY
+    text_match = re.search(r'^(\d{1,2})[-\s](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-\s](\d{2,4})$', s, re.IGNORECASE)
+    if text_match:
+        try:
+            day = int(text_match.group(1))
+            month = MONTH_MAP.get(text_match.group(2).lower(), 1)
+            year = int(text_match.group(3))
+            if year < 100:
+                year += 2000
+            if 1950 <= year <= 2100:
+                dt = datetime.date(year, month, day)
+                return dt.isoformat()
+        except ValueError:
+            pass
+    return None
 
 
 def safe_code(val):
@@ -499,6 +523,57 @@ def extract_weekly_summary(wb, filename=None):
     }
 
 
+def detect_milestone_columns(ws, header_group_row, subheader_row, start_col=20, max_col=65):
+    """
+    Dynamically scan milestone group headers (e.g. IFR, IFA, AFC, AP or IFA (A1), IFA (C1))
+    and their subheaders (PLAN, REBASELINE PLAN, FORECAST, D2 SUBMIT ID, SUBMIT TO PTTEPI DATE, etc.)
+    to map column numbers for each milestone block, avoiding errors caused by newly inserted template columns.
+    """
+    group_spans = []
+    for c in range(start_col, max_col + 1):
+        val = ws.cell(row=header_group_row, column=c).value
+        if val:
+            v_str = str(val).strip().upper()
+            # Match recognized milestone group labels
+            for name in ["IFA (A1)", "IFA (C1)", "IFR", "IFA", "AFC", "AP"]:
+                if v_str == name or v_str.startswith(name):
+                    group_spans.append((c, name))
+                    break
+
+    milestones = {}
+    for idx, (c_start, ms_name) in enumerate(group_spans):
+        c_end = group_spans[idx + 1][0] - 1 if idx + 1 < len(group_spans) else max_col
+        key = ms_name
+        if key == "AP":
+            key = f"AP_{idx}"
+        milestones[key] = {}
+        for c in range(c_start, c_end + 1):
+            sub = ws.cell(row=subheader_row, column=c).value
+            if not sub:
+                continue
+            sub_norm = re.sub(r'\s+', ' ', str(sub).strip().upper())
+            if "SUBMIT TO PTTEPI" in sub_norm:
+                milestones[key]["submit_date"] = c
+            elif "SUBMIT ID" in sub_norm or "D2 SUBMIT" in sub_norm:
+                milestones[key]["submit_id"] = c
+            elif "REBASELINE" in sub_norm:
+                milestones[key]["rebaseline"] = c
+            elif "FORECAST" in sub_norm:
+                milestones[key]["forecast"] = c
+            elif "PLAN" in sub_norm and "REBASELINE" not in sub_norm:
+                milestones[key]["plan"] = c
+            elif "RETURN FROM PTTEPI" in sub_norm or "RETURN DATE" in sub_norm:
+                milestones[key]["return_date"] = c
+            elif "RETURN CODE" in sub_norm:
+                milestones[key]["return_code"] = c
+            elif "ACTUAL" in sub_norm:
+                milestones[key]["actual"] = c
+            elif "TRANSMITTAL" in sub_norm:
+                milestones[key]["transmittal"] = c
+
+    return milestones
+
+
 def extract_documents(wb, sheet_name, wp_label):
     """Extract document-level data from a WP sheet."""
     if sheet_name not in wb.sheetnames:
@@ -506,7 +581,21 @@ def extract_documents(wb, sheet_name, wp_label):
 
     ws = wb[sheet_name]
     documents = []
-    header_row = 13  # Row 13 has column headers
+
+    # Dynamically detect milestone columns from Rows 12 & 13
+    col_map = detect_milestone_columns(ws, header_group_row=12, subheader_row=13)
+    ifr_cols = col_map.get("IFR", {})
+    ifa_cols = col_map.get("IFA", {})
+    afc_cols = col_map.get("AFC", {})
+    ap_cols = next((v for k, v in col_map.items() if k.startswith("AP")), {})
+
+    def get_c(r, dyn_dict, field_key, fallback_letter):
+        c_idx = dyn_dict.get(field_key)
+        if c_idx:
+            return ws.cell(row=r, column=c_idx).value
+        if fallback_letter:
+            return ws[f"{fallback_letter}{r}"].value
+        return None
 
     for row in range(17, ws.max_row + 1):
         doc_no = safe_str(ws[f"I{row}"].value)
@@ -523,37 +612,36 @@ def extract_documents(wb, sheet_name, wp_label):
             continue
 
         # IFR dates
-        ifr_plan = safe_date(ws[f"V{row}"].value)
-        ifr_forecast = safe_date(ws[f"W{row}"].value)
-        ifr_submit_id = safe_str(ws[f"X{row}"].value)
-        ifr_submit_date = safe_date(ws[f"Y{row}"].value)
-        ifr_actual = safe_date(ws[f"Z{row}"].value)
-        ifr_transmittal = safe_str(ws[f"AA{row}"].value)
+        ifr_plan = safe_date(get_c(row, ifr_cols, "plan", "V"))
+        ifr_forecast = safe_date(get_c(row, ifr_cols, "forecast", None) or get_c(row, ifr_cols, "rebaseline", "W"))
+        ifr_submit_id = safe_str(get_c(row, ifr_cols, "submit_id", "X"))
+        ifr_submit_date = safe_date(get_c(row, ifr_cols, "submit_date", "Y"))
+        ifr_actual = safe_date(get_c(row, ifr_cols, "actual", "Z"))
+        ifr_transmittal = safe_str(get_c(row, ifr_cols, "transmittal", "AA"))
 
         # IFA dates
-        ifa_plan = safe_date(ws[f"AB{row}"].value)
-        ifa_forecast = safe_date(ws[f"AC{row}"].value)
-        ifa_submit_id = safe_str(ws[f"AD{row}"].value)
-        ifa_submit_date = safe_date(ws[f"AE{row}"].value)
-        ifa_actual = safe_date(ws[f"AF{row}"].value)
-        ifa_transmittal = safe_str(ws[f"AG{row}"].value)
+        ifa_plan = safe_date(get_c(row, ifa_cols, "plan", "AB"))
+        ifa_forecast = safe_date(get_c(row, ifa_cols, "forecast", None) or get_c(row, ifa_cols, "rebaseline", "AC"))
+        ifa_submit_id = safe_str(get_c(row, ifa_cols, "submit_id", "AD"))
+        ifa_submit_date = safe_date(get_c(row, ifa_cols, "submit_date", "AE"))
+        ifa_actual = safe_date(get_c(row, ifa_cols, "actual", "AF"))
+        ifa_transmittal = safe_str(get_c(row, ifa_cols, "transmittal", "AG"))
 
         # AFC dates
-        afc_plan = safe_date(ws[f"AH{row}"].value)
-        afc_forecast = safe_date(ws[f"AI{row}"].value)
-        afc_submit_id = safe_str(ws[f"AJ{row}"].value)
-        afc_submit_date = safe_date(ws[f"AK{row}"].value)
-        afc_actual = safe_date(ws[f"AL{row}"].value)
-        afc_transmittal = safe_str(ws[f"AM{row}"].value)
+        afc_plan = safe_date(get_c(row, afc_cols, "plan", "AH"))
+        afc_forecast = safe_date(get_c(row, afc_cols, "forecast", None) or get_c(row, afc_cols, "rebaseline", "AI"))
+        afc_submit_id = safe_str(get_c(row, afc_cols, "submit_id", "AJ"))
+        afc_submit_date = safe_date(get_c(row, afc_cols, "submit_date", "AK"))
+        afc_actual = safe_date(get_c(row, afc_cols, "actual", "AL"))
+        afc_transmittal = safe_str(get_c(row, afc_cols, "transmittal", "AM"))
 
         # AP (Approval/Return)
-        ap_plan = safe_date(ws[f"AN{row}"].value)
-        ap_forecast = safe_date(ws[f"AO{row}"].value)
-        ap_return_code = safe_code(ws[f"AP{row}"].value)
-        ap_return_date = safe_date(ws[f"AQ{row}"].value)
+        ap_plan = safe_date(get_c(row, ap_cols, "plan", "AN"))
+        ap_forecast = safe_date(get_c(row, ap_cols, "forecast", None) or get_c(row, ap_cols, "rebaseline", "AO"))
+        ap_return_code = safe_code(get_c(row, ap_cols, "return_code", "AP"))
+        ap_return_date = safe_date(get_c(row, ap_cols, "return_date", "AQ"))
 
         # Determine status based on "Submit to PTTEPI Date" columns
-        # Y = IFR Submit, AE = IFA Submit, AK = AFC Submit
         if afc_submit_date and afc_submit_date not in ("", None):
             status = "AFC Submitted"
         elif ifa_submit_date and ifa_submit_date not in ("", None):
@@ -633,6 +721,21 @@ def extract_mr_tbe_documents(wb):
     documents = []
     current_wp = "WP01 Topside"
 
+    col_map = detect_milestone_columns(ws, header_group_row=10, subheader_row=11)
+    a1_cols = col_map.get("IFA (A1)", {})
+    c1_cols = col_map.get("IFA (C1)", {})
+    ap_groups = [v for k, v in col_map.items() if k.startswith("AP")]
+    ap1_cols = ap_groups[0] if len(ap_groups) > 0 else {}
+    ap2_cols = ap_groups[1] if len(ap_groups) > 1 else {}
+
+    def get_mr_c(r, dyn_dict, field_key, fallback_col_idx):
+        c_idx = dyn_dict.get(field_key)
+        if c_idx:
+            return ws.cell(row=r, column=c_idx).value
+        if fallback_col_idx:
+            return ws.cell(row=r, column=fallback_col_idx).value
+        return None
+
     for r in range(12, ws.max_row + 1):
         b_val = ws.cell(row=r, column=2).value  # Column B
         if not b_val:
@@ -667,32 +770,32 @@ def extract_mr_tbe_documents(wb):
         remarks = safe_str(ws.cell(row=r, column=21).value)  # Column U: Remarks / Revision Scheme
 
         # Milestone 1: IFA (A1)
-        ifa_plan = safe_date(ws.cell(row=r, column=22).value)       # Column V: PLAN
-        ifa_forecast = safe_date(ws.cell(row=r, column=23).value)   # Column W: REBASELINE PLAN / Forecast
-        ifa_submit_id = safe_str(ws.cell(row=r, column=24).value)   # Column X: D2 SUBMIT ID
-        ifa_submit_date = safe_date(ws.cell(row=r, column=25).value)# Column Y: SUBMIT TO PTTEPI DATE
-        ifa_actual = safe_date(ws.cell(row=r, column=26).value)     # Column Z: ACTUAL meDMS
-        ifa_transmittal = safe_str(ws.cell(row=r, column=27).value) # Column AA: Transmittal No.
+        ifa_plan = safe_date(get_mr_c(r, a1_cols, "plan", 22))
+        ifa_forecast = safe_date(get_mr_c(r, a1_cols, "forecast", None) or get_mr_c(r, a1_cols, "rebaseline", 23))
+        ifa_submit_id = safe_str(get_mr_c(r, a1_cols, "submit_id", 24))
+        ifa_submit_date = safe_date(get_mr_c(r, a1_cols, "submit_date", 25))
+        ifa_actual = safe_date(get_mr_c(r, a1_cols, "actual", 26))
+        ifa_transmittal = safe_str(get_mr_c(r, a1_cols, "transmittal", 27))
 
         # Milestone 1 Return: AP
-        ap_plan = safe_date(ws.cell(row=r, column=28).value)        # Column AB
-        ap_forecast = safe_date(ws.cell(row=r, column=29).value)    # Column AC
-        ap_return_code = safe_code(ws.cell(row=r, column=30).value) # Column AD: RETURN CODE
-        ap_return_date = safe_date(ws.cell(row=r, column=31).value) # Column AE: RETURN FROM PTTEPI DATE
+        ap_plan = safe_date(get_mr_c(r, ap1_cols, "plan", 28))
+        ap_forecast = safe_date(get_mr_c(r, ap1_cols, "forecast", None) or get_mr_c(r, ap1_cols, "rebaseline", 29))
+        ap_return_code = safe_code(get_mr_c(r, ap1_cols, "return_code", 30))
+        ap_return_date = safe_date(get_mr_c(r, ap1_cols, "return_date", 31))
 
         # Milestone 2: IFA (C1)
-        afc_plan = safe_date(ws.cell(row=r, column=34).value)       # Column AH: PLAN
-        afc_forecast = safe_date(ws.cell(row=r, column=35).value)   # Column AI: FORECAST
-        afc_submit_id = safe_str(ws.cell(row=r, column=36).value)   # Column AJ: D2 SUBMIT ID
-        afc_submit_date = safe_date(ws.cell(row=r, column=37).value)# Column AK: SUBMIT TO PTTEPI DATE
-        afc_actual = safe_date(ws.cell(row=r, column=38).value)     # Column AL: ACTUAL meDMS
-        afc_transmittal = safe_str(ws.cell(row=r, column=39).value) # Column AM: Transmittal No.
+        afc_plan = safe_date(get_mr_c(r, c1_cols, "plan", 34))
+        afc_forecast = safe_date(get_mr_c(r, c1_cols, "forecast", None) or get_mr_c(r, c1_cols, "rebaseline", 35))
+        afc_submit_id = safe_str(get_mr_c(r, c1_cols, "submit_id", 36))
+        afc_submit_date = safe_date(get_mr_c(r, c1_cols, "submit_date", 37))
+        afc_actual = safe_date(get_mr_c(r, c1_cols, "actual", 38))
+        afc_transmittal = safe_str(get_mr_c(r, c1_cols, "transmittal", 39))
 
         # Milestone 2 Return: AP
-        ap2_plan = safe_date(ws.cell(row=r, column=40).value)       # Column AN
-        ap2_forecast = safe_date(ws.cell(row=r, column=41).value)   # Column AO
-        ap2_return_code = safe_code(ws.cell(row=r, column=42).value)# Column AP: RETURN CODE
-        ap2_return_date = safe_date(ws.cell(row=r, column=43).value)# Column AQ: RETURN FROM PTTEPI DATE
+        ap2_plan = safe_date(get_mr_c(r, ap2_cols, "plan", 40))
+        ap2_forecast = safe_date(get_mr_c(r, ap2_cols, "forecast", None) or get_mr_c(r, ap2_cols, "rebaseline", 41))
+        ap2_return_code = safe_code(get_mr_c(r, ap2_cols, "return_code", 42))
+        ap2_return_date = safe_date(get_mr_c(r, ap2_cols, "return_date", 43))
 
         # Determine document status
         if afc_submit_date:
@@ -1210,27 +1313,77 @@ def extract_all_data(excel_path=None, force_reload=False):
 
     return result
 
-def generate_excel_bytes(data_list, headers):
-    """Generate Excel file in memory and return bytes."""
+def generate_excel_bytes(data_list, columns, sheet_title="Export"):
+    """
+    Generate a styled, professional Excel file in memory and return binary bytes.
+    columns is a list of tuples: (field_key, display_label, min_width)
+    """
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "Export"
+    ws.title = sheet_title
+
+    # Header styling: Navy fill, bold white text, centered, thin border
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+    header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    border_thin = Border(
+        left=Side(style="thin", color="CBD5E1"),
+        right=Side(style="thin", color="CBD5E1"),
+        top=Side(style="thin", color="CBD5E1"),
+        bottom=Side(style="thin", color="CBD5E1"),
+    )
+
+    ws.row_dimensions[1].height = 28
 
     # Write headers
-    for col_idx, header in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col_idx, value=header)
-        cell.font = Font(bold=True)
+    for col_idx, (key, label, min_w) in enumerate(columns, 1):
+        cell = ws.cell(row=1, column=col_idx, value=label)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+        cell.border = border_thin
+
+    # Data styling
+    data_font = Font(name="Calibri", size=10)
+    data_align_left = Alignment(horizontal="left", vertical="center")
+    data_align_center = Alignment(horizontal="center", vertical="center")
+
+    col_widths = {col_idx: min_w for col_idx, (key, label, min_w) in enumerate(columns, 1)}
 
     # Write data rows
     for row_idx, row_data in enumerate(data_list, 2):
-        for col_idx, key in enumerate(headers, 1):
+        ws.row_dimensions[row_idx].height = 20
+        for col_idx, (key, label, min_w) in enumerate(columns, 1):
             val = row_data.get(key, "")
-            ws.cell(row=row_idx, column=col_idx, value=val)
+            if val is None or val == "":
+                val_display = "—"
+            elif isinstance(val, float) and "pct" in key:
+                val_display = f"{val * 100:.2f}%"
+            else:
+                val_display = val
 
-    # Adjust column widths
-    for col_idx, header in enumerate(headers, 1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=val_display)
+            cell.font = data_font
+            cell.border = border_thin
+
+            # Center alignment for dates, codes, numbers, and categories
+            if any(term in key for term in ["date", "days", "milestone", "type", "discipline", "urgency", "pct", "variance", "status", "no"]):
+                cell.alignment = data_align_center
+            else:
+                cell.alignment = data_align_left
+
+            # Calculate width based on content length
+            val_str = str(val_display)
+            if len(val_str) > col_widths[col_idx]:
+                col_widths[col_idx] = min(len(val_str) + 3, 50)
+
+    # Set column widths
+    for col_idx, width in col_widths.items():
         col_letter = get_column_letter(col_idx)
-        ws.column_dimensions[col_letter].width = 20
+        ws.column_dimensions[col_letter].width = max(width, 12)
+
+    # Freeze header row
+    ws.freeze_panes = "A2"
 
     out = io.BytesIO()
     wb.save(out)
@@ -1252,17 +1405,18 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         super().end_headers()
 
     def do_GET(self):
-        if self.path == "/api/data":
+        path_clean = self.path.split("?")[0].rstrip("/")
+        if path_clean == "/api/data":
             self.send_api_data()
-        elif self.path == "/api/refresh":
+        elif path_clean == "/api/refresh":
             self.send_api_refresh()
-        elif self.path == "/api/export/delayed":
+        elif path_clean in ("/api/export/delayed", "/api/export/delayed.xlsx"):
             self.send_export_delayed()
-        elif self.path == "/api/export/lookahead":
+        elif path_clean in ("/api/export/lookahead", "/api/export/lookahead.xlsx"):
             self.send_export_lookahead()
-        elif self.path == "/api/export/documents":
+        elif path_clean in ("/api/export/documents", "/api/export/documents.xlsx"):
             self.send_export_documents()
-        elif self.path == "/" or self.path == "/index.html":
+        elif path_clean in ("", "/", "/index.html"):
             self.path = "/index.html"
             super().do_GET()
         else:
@@ -1354,14 +1508,25 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
             delayed = data.get("delay_lookahead", {}).get("delayed", [])
             cutoff = data.get("delay_lookahead", {}).get("cutoff_date", "unknown")
-            headers = ["doc_no", "title", "discipline", "wp", "milestone", "plan_date", "forecast_date", "submit_date", "delay_days", "delay_type"]
+            columns = [
+                ("delay_type", "Delay Type", 24),
+                ("wp", "Work Package", 16),
+                ("discipline", "Discipline", 12),
+                ("doc_no", "Document No.", 28),
+                ("title", "Document Title", 40),
+                ("milestone", "Milestone", 12),
+                ("plan_date", "Plan Date", 14),
+                ("forecast_date", "Forecast Date", 14),
+                ("submit_date", "Submit Date", 14),
+                ("delay_days", "Days Overdue", 14),
+            ]
             
-            excel_bytes = generate_excel_bytes(delayed, headers)
-            filename = f"Delay Documented_{cutoff}.xlsx"
+            excel_bytes = generate_excel_bytes(delayed, columns, sheet_title="Delayed Deliverables")
+            filename = f"Delayed_Documents_{cutoff}.xlsx"
 
             self.send_response(200)
             self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"; filename*=UTF-8\'\'{filename}')
             self.send_header("Content-Length", str(len(excel_bytes)))
             self.end_headers()
             self.wfile.write(excel_bytes)
@@ -1380,20 +1545,34 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
             docs = data.get("documents", [])
             cutoff = data.get("delay_lookahead", {}).get("cutoff_date", "unknown")
-            headers = [
-                "doc_no", "title", "discipline", "wp", "type", "plan_pct", "actual_pct", "variance",
-                "ifr_forecast", "ifr_submit_date", "ifa_forecast", "ifa_submit_date",
-                "afc_forecast", "afc_submit_date", "ap_forecast", "ap_return_code", "ap_return_date",
-                "status", "is_pending_final_approval"
+            columns = [
+                ("doc_no", "Document No.", 28),
+                ("title", "Document Title", 40),
+                ("wp", "Work Package", 16),
+                ("discipline", "Discipline", 12),
+                ("type", "Type", 12),
+                ("status", "Status", 18),
+                ("plan_pct", "Plan %", 12),
+                ("forecast_pct", "Forecast %", 12),
+                ("actual_pct", "Actual %", 12),
+                ("variance", "Variance", 12),
+                ("ifr_forecast", "IFR Forecast", 14),
+                ("ifr_submit_date", "IFR Submit Date", 14),
+                ("ifa_forecast", "IFA Forecast", 14),
+                ("ifa_submit_date", "IFA Submit Date", 14),
+                ("afc_forecast", "AFC Forecast", 14),
+                ("afc_submit_date", "AFC Submit Date", 14),
+                ("ap_return_code", "Return Code", 14),
+                ("ap_return_date", "Return Date", 14),
+                ("is_pending_final_approval", "Pending Final Approval", 22),
             ]
             
-            # Create a simplified list of dicts for export because the backend dicts have exact keys
-            excel_bytes = generate_excel_bytes(docs, headers)
+            excel_bytes = generate_excel_bytes(docs, columns, sheet_title="Master Document Register")
             filename = f"Engineering_Documents_{cutoff}.xlsx"
 
             self.send_response(200)
             self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"; filename*=UTF-8\'\'{filename}')
             self.send_header("Content-Length", str(len(excel_bytes)))
             self.end_headers()
             self.wfile.write(excel_bytes)
@@ -1410,16 +1589,37 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             if data is None:
                 data = extract_all_data()
 
-            lookahead = data.get("delay_lookahead", {}).get("lookahead", [])
+            lookahead_raw = data.get("delay_lookahead", {}).get("lookahead", [])
             cutoff = data.get("delay_lookahead", {}).get("cutoff_date", "unknown")
-            headers = ["doc_no", "title", "discipline", "wp", "milestone", "plan_date", "forecast_date", "days_remaining", "urgency"]
+
+            # Enrich display fields for urgency and slippage
+            lookahead = []
+            for item in lookahead_raw:
+                enriched = dict(item)
+                urgency = item.get("urgency", "")
+                enriched["urgency_text"] = "Due This Week" if urgency == "this_week" else "Due Next Week"
+                enriched["slippage_text"] = "⚠️ Slipping" if item.get("is_slipping") else "On Track"
+                lookahead.append(enriched)
+
+            columns = [
+                ("urgency_text", "Urgency", 18),
+                ("wp", "Work Package", 16),
+                ("discipline", "Discipline", 12),
+                ("doc_no", "Document No.", 28),
+                ("title", "Document Title", 40),
+                ("milestone", "Milestone", 12),
+                ("plan_date", "Plan Date", 14),
+                ("forecast_date", "Forecast Date", 14),
+                ("days_remaining", "Days Left", 14),
+                ("slippage_text", "Slippage", 16),
+            ]
             
-            excel_bytes = generate_excel_bytes(lookahead, headers)
-            filename = f"2-Week Lookahead_{cutoff}.xlsx"
+            excel_bytes = generate_excel_bytes(lookahead, columns, sheet_title="2-Week Lookahead")
+            filename = f"Lookahead_Documents_{cutoff}.xlsx"
 
             self.send_response(200)
             self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"; filename*=UTF-8\'\'{filename}')
             self.send_header("Content-Length", str(len(excel_bytes)))
             self.end_headers()
             self.wfile.write(excel_bytes)

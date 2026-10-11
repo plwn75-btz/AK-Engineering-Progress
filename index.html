@@ -154,7 +154,7 @@
                 <div class="filter-group">
                     <input type="text" class="filter-input search-input" id="filterSearch" placeholder="🔍 Search document no. or title..." oninput="filterDocuments()">
                 </div>
-                <a href="/api/export/documents" class="export-btn" download style="text-decoration: none;">📥 Export Excel</a>
+                <a href="/api/export/documents.xlsx" class="export-btn" download="Engineering_Documents.xlsx" style="text-decoration: none;">📥 Export Excel</a>
             </div>
 
             <div class="stats-row" id="docStatsRow"></div>
@@ -252,7 +252,7 @@
             <div class="warning-panel" id="lookaheadPanel">
                 <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
                     <div class="panel-title" style="margin-bottom: 0;">⚠️ 2-Week Look-ahead — Documents Due Soon</div>
-                    <a href="/api/export/lookahead" class="export-btn" download style="text-decoration: none;">📥 Export Excel</a>
+                    <a href="/api/export/lookahead.xlsx" class="export-btn" download="2-Week_Lookahead.xlsx" style="text-decoration: none;">📥 Export Excel</a>
                 </div>
                 <div class="table-wrapper" style="max-height: 350px; overflow-y: auto;">
                     <table class="data-table" id="lookaheadTable">
@@ -281,7 +281,7 @@
                     <div class="panel-title" style="margin-bottom: 0;">🔴 Delayed Documents (Type 3.1: Submitted Late & Type 3.2: Overdue Not Issued)</div>
                     <div>
                         <span class="page-info" id="delayedCountInfo" style="margin-right: 1rem;">—</span>
-                        <a href="/api/export/delayed" class="export-btn" download style="text-decoration: none;">📥 Export Excel</a>
+                        <a href="/api/export/delayed.xlsx" class="export-btn" download="Delayed_Documents.xlsx" style="text-decoration: none;">📥 Export Excel</a>
                     </div>
                 </div>
                 <div class="table-wrapper" style="max-height: 400px; overflow-y: auto;">

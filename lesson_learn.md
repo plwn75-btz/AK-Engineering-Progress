@@ -277,3 +277,49 @@ When uploading large weekly MDR Excel files (e.g. `Cut off 02-Oct-26.xlsx`, ~10M
 
 **Lesson:**
 For memory-constrained serverless/PaaS platforms (e.g. Render 512MB), never load full Excel workbooks if raw database/log sheets exist in the file. Filter the ZIP archive to required sheets and cache precomputed JSON payloads to decouple web response times and memory usage from workbook sizes.
+
+---
+
+### LL-19: Template Column Insertion (FORECAST) & Dynamic Milestone Header Mapping
+
+**Problem:**
+When uploading `Cut off 02-Oct-26.xlsx`, the Overdue & Lookahead tab displayed thousands of false delays (`Type 3.2: Overdue (Not Issued)`), and the Submit Date column displayed bizarre future dates such as `01 Jan 2037`, `01 Jan 2036`, and `01 Jan 2046`.
+
+**Root Cause:**
+1. **Template Column Insertion**: In the Rev B1 cut-off `02-Oct-26`, the contractor inserted a dedicated `FORECAST` column into every milestone group (IFR, IFA, AFC, AP, IFA A1, IFA C1) across all Work Package sheets and `PRO.ENGINEERING_MR TBE`. Each milestone expanded from 6 to 7 columns.
+2. **Column Misalignment**: Because `server.py` had hardcoded column letters (e.g., `Y` for `ifr_submit_date`), it ended up reading Column `Y`, which was now `D2 SUBMIT ID` (strings like `"AO-000037"`, `"AO-000036"`). The actual submit date (`2026-04-10`) had shifted to Column `Z`.
+3. **Date Parse & Delay Cascade**:
+   - In Python, `datetime.date.fromisoformat("AO-000037")` failed, so `submit_dt` evaluated to `None`.
+   - The backend falsely concluded the deliverable was unsubmitted and flagged it as `Type 3.2 Overdue (Not Issued)` (generating ~3,400 false delays).
+   - In frontend JavaScript, `new Date("AO-000037")` was parsed by the V8 date parser as year 37 (`01 Jan 2037`).
+
+**Solution:**
+1. **Dynamic Column Mapping (`detect_milestone_columns`)**: Replaced hardcoded column letters with a dynamic scanner that inspects Row 12 (WP) / Row 10 (MR TBE) for milestone group spans and Row 13 (WP) / Row 11 (MR TBE) for subheader labels (`PLAN`, `REBASELINE PLAN`, `FORECAST`, `D2 SUBMIT ID`, `SUBMIT TO PTTEPI DATE`, `RETURN CODE`, `RETURN FROM PTTEPI DATE`). Works transparently across 6-column and 7-column formats.
+2. **Strict Date Sanitization**: Updated `safe_date()` in `server.py` to only accept calendar date formats (`YYYY-MM-DD` or `DD-Mon-YY`) and reject code strings.
+3. **Frontend Guard**: Updated `formatDate()` in `app.js` to validate date strings using regex before parsing with `new Date()`.
+
+**Lesson:**
+Just as row indices must be dynamically resolved by label (LL-09), column positions within repeated milestone groups must also be dynamically resolved by scanning header labels rather than relying on hardcoded column letters. Always sanitize date inputs to prevent alphanumeric IDs from evaluating as century dates in browser JavaScript.
+
+---
+
+### LL-20: Excel Export MIME Types, Filename Quoting & Client-Side Download Extensions
+
+**Problem:**
+Clicking "Export Excel" buttons in the 2-Week Lookahead and Delayed Documents tables resulted in files that the operating system or Excel did not recognize (or downloaded extensionless binary files such as `delayed` and `lookahead`, or temporary UUID strings in browser download managers), prompting "The export file is not excel file" errors.
+
+**Root Cause:**
+1. **Client-Side Download Attributes**: In `index.html`, anchor tags were written as `<a href="/api/export/delayed" download>`. Because the endpoint URL had no file extension and the `download` attribute had no filename specified, Chromium/WebKit browsers defaulted the saved filename to the endpoint path basename (`delayed`), omitting `.xlsx`.
+2. **Content-Disposition Filenames with Spaces**: In `server.py`, the `Content-Disposition` header filenames contained spaces (e.g. `filename="Delay Documented_...xlsx"`), which some browser parsers truncate or misparse.
+3. **Missing RFC 6266 Parameter**: Server responses lacked the modern `filename*=UTF-8''...` parameter recommended for unambiguous browser filename resolution.
+4. **Automated Testing Artifacts in Browser Tray**: When browser subagents or Playwright automation click download links connected to a user's active Chrome instance, Playwright stores intercepted downloads in `%TEMP%\playwright-artifacts-*\` with random UUID names (e.g., `21097091-171d-4f26-a601-cf8a8f718d0d`) without extensions. These appear in Chrome's download shelf and appear broken unless `.xlsx` is manually appended.
+5. **Unstyled Workbook Output**: Generated workbooks originally contained raw lowercase dictionary keys (e.g. `doc_no`, `wp`, `delay_type`) without table styling, freeze panes, or auto-fitted column widths.
+
+**Solution:**
+1. **Explicit Client Download Tags**: Updated all export links in `index.html` to supply explicit `.xlsx` endpoints and explicit download filenames (e.g. `<a href="/api/export/delayed.xlsx" download="Delayed_Documents.xlsx">`).
+2. **Flexible Route Handling**: Updated `server.py` request routing to strip query strings and accept both extensionless and `.xlsx` URLs (`/api/export/delayed.xlsx`, `/api/export/lookahead.xlsx`, `/api/export/documents.xlsx`).
+3. **Sanitized RFC 6266 Content-Disposition**: Removed spaces and used standardized uppercase names with dual attributes: `Content-Disposition: attachment; filename="{filename}"; filename*=UTF-8''{filename}` (`Delayed_Documents_{cutoff}.xlsx`, `Lookahead_Documents_{cutoff}.xlsx`, `Engineering_Documents_{cutoff}.xlsx`).
+4. **Professional openpyxl Styling**: Enhanced `generate_excel_bytes` with navy headers (`#1F4E79`), bold white text, thin cell borders, freeze panes on Row 1 (`A2`), human-readable column titles, and automated column width sizing based on max cell content length.
+
+**Lesson:**
+To guarantee browser Excel downloads work reliably across all operating systems and browsers, never rely solely on server-side `Content-Disposition`. Pair server headers with explicit `.xlsx` URL routes and client-side `download="filename.xlsx"` attributes. Ensure attachment filenames avoid unescaped whitespace and columns feature professional table styling and human-readable headers. Note that automated browser test tools (Playwright) will display temporary GUID download artifacts in the browser's download shelf that must be renamed with `.xlsx` if opened directly.
